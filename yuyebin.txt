@@ -1,0 +1,10 @@
+deb http://mirrors.aliyun.com/ubuntu/ bionic main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ bionic-security main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ bionic-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ bionic-backports main restricted universe multiverse
+ 
+
+ #将公钥添加至服务器，即终端中输入
+apt-key adv --recv-keys --keyserver keyserver.ubuntu.com 8B57C5C2836F4BEB
+
+deb http://http.kali.org/kali kali-rolling main contrib non-free non-free-firmware
