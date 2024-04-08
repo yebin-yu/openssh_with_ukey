@@ -181,14 +181,14 @@ kex_ecdh_dec_key_group(struct kex *kex, const struct sshbuf *ec_blob,
 		if (SM2KAP_compute_key(kbuf, klen, dh_pub, key, server) != (int)klen ||
 	    BN_bin2bn(kbuf, klen, shared_secret) == NULL) {
 			r = SSH_ERR_LIBCRYPTO_ERROR;
-+			goto out;
-+		}
-+	} else {
-+		if (ECDH_compute_key(kbuf, klen, dh_pub, key, NULL) != (int)klen ||
-+	    BN_bin2bn(kbuf, klen, shared_secret) == NULL) {
-+			r = SSH_ERR_LIBCRYPTO_ERROR;
-+			goto out;
-+		}
+			goto out;
+		}
+	} else {
+		if (ECDH_compute_key(kbuf, klen, dh_pub, key, NULL) != (int)klen ||
+	    BN_bin2bn(kbuf, klen, shared_secret) == NULL) {
+			r = SSH_ERR_LIBCRYPTO_ERROR;
+			goto out;
+		}
 	}
 
 #ifdef DEBUG_KEXECDH
