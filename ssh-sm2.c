@@ -1,5 +1,9 @@
 #include "includes.h"
 #include <sys/types.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <openssl/bn.h>
 #include <openssl/ecdsa.h>
 #include <openssl/evp.h>
@@ -9,6 +13,7 @@
 #include "ssherr.h"
 #include "digest.h"
 #include "sshkey.h"
+#include "skfapi.h"
 
 #include "openbsd-compat/openssl-compat.h"
 
@@ -148,6 +153,186 @@ sm2_get_sig(EVP_PKEY *pkey, const u_char *data,
 out:
 	EVP_PKEY_CTX_free(pctx);
 	EVP_MD_CTX_free(mctx);
+	return ret;
+}
+
+static void dumpBytesHex(const char *name, unsigned char *bytes, size_t bytesLen)
+{
+    const char *outName = (name != NULL) ? name : "Default:";
+    printf("%s", outName);
+
+    for (int i = 0; i < bytesLen; i++) {
+        printf("%x", bytes[i]);
+    }
+
+    printf("\n");
+}
+
+static int
+ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
+{
+    HANDLE hdev = NULL;
+    ULONG ulRslt = SAR_OK;
+
+    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    char szDevName[256] = {0}; 
+    ULONG ulDevNameLen = 256;
+    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+    printf("szDevName: %s", szDevName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
+
+    // 连接设备
+    sleep(2);
+    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+    NOT_OK_THROW(ulRslt, "SKF_ConnectDev error");
+
+    // 获取application，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：GM3000RSA
+    char appName[256] = {0}; 
+    ULONG appnameLen = 256;
+    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    printf("appName: %s", appName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
+
+    // 打开应用
+    HANDLE happ;
+    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+    NOT_OK_THROW(ulRslt, "SKF_OpenApplication error");
+
+    // 验证pin码
+    char pinStr[32];
+    ULONG retryCnt = 15;
+    printf("UKEY pin:");
+    scanf("%s", pinStr);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCnt);
+    NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
+
+    // 获取容器名
+	// ukey上获取到的值应该为：sm2
+    char containerName[256] = {0};
+    ULONG containerNameLen = 256;
+    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+    printf("containerName: %s", containerName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
+
+    // 打开容器
+    HANDLE hcontainer;
+    ulRslt = SKF_OpenContainer(happ, containerName, &hcontainer);
+    NOT_OK_THROW(ulRslt, "SKF_OpenContainer error");
+
+    // 导出公钥 -> 签名的时候不需要
+    // BYTE buf[512] = {0};
+    // ULONG bufLen = sizeof(buf);
+    // ulRslt = SKF_ExportPublicKey(hcontainer, TRUE, buf, &bufLen);
+    // NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
+
+    // ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
+    // FILE *fp = fopen("pub.gm", "wb");
+    // fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
+    // fclose(fp);
+
+    // 尝试签名
+	// FIXME: 签名需要的是hcontainer，是否需要每次都重新获取？
+	//        可以在创建ssh连接的时候就保存container
+    ECCSIGNATUREBLOB stSign = {0};
+    BYTE data_byte[datalen];
+	for (int i = 0; i < strlen(datalen); i++) {
+    	data_byte[i] = (byte)data[i];
+	}
+
+    ulRslt = SKF_ECCSignData(hcontainer, data_byte, 32, &stSign);
+    NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
+
+    // 保存签名文件
+    fp = fopen("sig.gm", "wb");
+    fwrite(&stSign, sizeof(BYTE), sizeof(ECCSIGNATUREBLOB), fp);
+    fclose(fp);
+
+	fp = fopen("sig.gm", "r");
+	size_t n = fread(sig, 1, sizeof(ECCSIGNATUREBLOB), fp);
+	fclose(fp);
+
+	// 打印看公钥和签名信息 -> 需要删除
+    dumpBytesHex("x: ", blob->XCoordinate, sizeof(blob->XCoordinate));
+    dumpBytesHex("y: ", blob->YCoordinate, sizeof(blob->YCoordinate));
+
+    dumpBytesHex("r: ", stSign.r, sizeof(stSign.r));
+    dumpBytesHex("s: ", stSign.s, sizeof(stSign.s));
+
+    // 验证签名 -> 这里也不需要
+    // ulRslt = SKF_ECCVerify(hdev, blob, data, 32, &stSign);
+    // NOT_OK_THROW(ulRslt, "SKF_ECCVerify");
+
+END_OF_FUN:
+    SKF_DisConnectDev(hdev);
+    return 1;
+}
+
+static int
+ssh_sm2_sign_new(struct sshkey *key,
+   u_char **sigp, size_t *lenp,
+   const u_char *data, size_t datalen,
+   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+{
+	u_char *sig = NULL;
+	int pkey_len = 0;
+	int r = 0;
+	int len = 0;
+	EVP_PKEY *key_sm2 = NULL;
+	struct sshbuf *b = NULL;
+	int ret = SSH_ERR_INTERNAL_ERROR;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	if (key == NULL || key->ecdsa == NULL ||
+		sshkey_type_plain(key->type) != KEY_SM2)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	// 初始化key_sm2，获取最终签名的长度，得修改。
+	// 【签名部分】获取sig，也就是签名内容，内容在sig中
+	size_t slen = sizeof(ECCSIGNATUREBLOB);
+	if ((sig = OPENSSL_malloc(sizeof(ECCSIGNATUREBLOB))) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+
+	if (ret = ukey_get_sig(data, datalen, sig, &slen)) {
+		goto out;
+	}
+    
+	// 把签名内容存在b中
+	if ((b = sshbuf_new()) == NULL) {
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_cstring(b, "sm2")) != 0 ||
+		(r = sshbuf_put_string(b, sig, slen)) != 0)
+		goto out;
+	
+	// 把签名存到b中，再把b拷贝到*sigp中
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			ret = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+			*lenp = len;
+	ret = 0;
+
+out:
+	EVP_PKEY_free(key_sm2);
+	if (sig != NULL) {
+		explicit_bzero(sig, slen);
+		OPENSSL_free(sig);
+	}
+	sshbuf_free(b);
 	return ret;
 }
 
