@@ -108,6 +108,7 @@
 #include "ssherr.h"
 #include "myproposal.h"
 #include "utf8.h"
+#include "skfapi.h"
 
 #ifdef ENABLE_PKCS11
 #include "ssh-pkcs11.h"
@@ -621,6 +622,73 @@ ssh_conn_info_free(struct ssh_conn_info *cinfo)
 	free(cinfo->homedir);
 	free(cinfo->locuser);
 	free(cinfo);
+}
+
+static void init_ukey
+{
+	HANDLE hdev = NULL;
+    ULONG ulRslt = SAR_OK;
+
+    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    char szDevName[256] = {0}; 
+    ULONG ulDevNameLen = 256;
+    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+    printf("szDevName: %s", szDevName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
+
+    // 连接设备
+    sleep(2);
+    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+    NOT_OK_THROW(ulRslt, "SKF_ConnectDev error");
+
+    // 获取application，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：GM3000RSA
+    char appName[256] = {0}; 
+    ULONG appnameLen = 256;
+    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    printf("appName: %s", appName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
+
+    // 打开应用
+    HANDLE happ;
+    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+    NOT_OK_THROW(ulRslt, "SKF_OpenApplication error");
+
+    // 验证pin码
+    char pinStr[32];
+    ULONG retryCnt = 15;
+    printf("UKEY pin:");
+    scanf("%s", pinStr);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCnt);
+    NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
+
+    // 获取容器名
+	// ukey上获取到的值应该为：sm2
+    char containerName[256] = {0};
+    ULONG containerNameLen = 256;
+    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+    printf("containerName: %s", containerName);
+    NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
+
+    // 打开容器
+    ulRslt = SKF_OpenContainer(happ, containerName, &g_container);
+    NOT_OK_THROW(ulRslt, "SKF_OpenContainer error");
+
+    // 导出公钥
+    BYTE buf[512] = {0};
+    ULONG bufLen = sizeof(buf);
+    ulRslt = SKF_ExportPublicKey(g_container, TRUE, buf, &bufLen);
+    NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
+
+    ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
+    FILE *fp = fopen("/etc/ssh/custom_authorized_keys", "wb");
+    fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
+    fclose(fp);
+
+END_OF_FUN:
+    SKF_DisConnectDev(hdev);
+    return 1;
 }
 
 /*

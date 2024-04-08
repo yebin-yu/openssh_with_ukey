@@ -171,67 +171,6 @@ static void dumpBytesHex(const char *name, unsigned char *bytes, size_t bytesLen
 static int
 ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
 {
-    HANDLE hdev = NULL;
-    ULONG ulRslt = SAR_OK;
-
-    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
-    char szDevName[256] = {0}; 
-    ULONG ulDevNameLen = 256;
-    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
-    printf("szDevName: %s", szDevName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
-
-    // 连接设备
-    sleep(2);
-    ulRslt = SKF_ConnectDev(szDevName, &hdev);
-    NOT_OK_THROW(ulRslt, "SKF_ConnectDev error");
-
-    // 获取application，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：GM3000RSA
-    char appName[256] = {0}; 
-    ULONG appnameLen = 256;
-    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
-    printf("appName: %s", appName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
-
-    // 打开应用
-    HANDLE happ;
-    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
-    NOT_OK_THROW(ulRslt, "SKF_OpenApplication error");
-
-    // 验证pin码
-    char pinStr[32];
-    ULONG retryCnt = 15;
-    printf("UKEY pin:");
-    scanf("%s", pinStr);
-    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCnt);
-    NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
-
-    // 获取容器名
-	// ukey上获取到的值应该为：sm2
-    char containerName[256] = {0};
-    ULONG containerNameLen = 256;
-    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
-    printf("containerName: %s", containerName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
-
-    // 打开容器
-    HANDLE hcontainer;
-    ulRslt = SKF_OpenContainer(happ, containerName, &hcontainer);
-    NOT_OK_THROW(ulRslt, "SKF_OpenContainer error");
-
-    // 导出公钥 -> 签名的时候不需要
-    // BYTE buf[512] = {0};
-    // ULONG bufLen = sizeof(buf);
-    // ulRslt = SKF_ExportPublicKey(hcontainer, TRUE, buf, &bufLen);
-    // NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
-
-    // ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
-    // FILE *fp = fopen("pub.gm", "wb");
-    // fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
-    // fclose(fp);
-
     // 尝试签名
 	// FIXME: 签名需要的是hcontainer，是否需要每次都重新获取？
 	//        可以在创建ssh连接的时候就保存container
@@ -241,7 +180,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
     	data_byte[i] = (byte)data[i];
 	}
 
-    ulRslt = SKF_ECCSignData(hcontainer, data_byte, 32, &stSign);
+    ulRslt = SKF_ECCSignData(g_container, data_byte, 32, &stSign);
     NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
 
     // 保存签名文件
@@ -253,12 +192,12 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
 	size_t n = fread(sig, 1, sizeof(ECCSIGNATUREBLOB), fp);
 	fclose(fp);
 
-	// 打印看公钥和签名信息 -> 需要删除
-    dumpBytesHex("x: ", blob->XCoordinate, sizeof(blob->XCoordinate));
-    dumpBytesHex("y: ", blob->YCoordinate, sizeof(blob->YCoordinate));
+	// 打印看公钥和签名信息 -> 实际不需要
+    // dumpBytesHex("x: ", blob->XCoordinate, sizeof(blob->XCoordinate));
+    // dumpBytesHex("y: ", blob->YCoordinate, sizeof(blob->YCoordinate));
 
-    dumpBytesHex("r: ", stSign.r, sizeof(stSign.r));
-    dumpBytesHex("s: ", stSign.s, sizeof(stSign.s));
+    // dumpBytesHex("r: ", stSign.r, sizeof(stSign.r));
+    // dumpBytesHex("s: ", stSign.s, sizeof(stSign.s));
 
     // 验证签名 -> 这里也不需要
     // ulRslt = SKF_ECCVerify(hdev, blob, data, 32, &stSign);
@@ -270,7 +209,7 @@ END_OF_FUN:
 }
 
 static int
-ssh_sm2_sign_new(struct sshkey *key,
+ssh_sm2_sign(struct sshkey *key,
    u_char **sigp, size_t *lenp,
    const u_char *data, size_t datalen,
    const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
@@ -337,7 +276,7 @@ out:
 }
 
 static int
-ssh_sm2_sign(struct sshkey *key,
+ssh_sm2_sign_origin(struct sshkey *key,
    u_char **sigp, size_t *lenp,
    const u_char *data, size_t datalen,
    const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
