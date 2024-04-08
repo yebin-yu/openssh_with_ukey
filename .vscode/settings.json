@@ -1,0 +1,15 @@
+{
+    "files.associations": {
+        "__locale": "c",
+        "sstream": "c",
+        "cstddef": "c",
+        "array": "cpp",
+        "type_traits": "cpp",
+        "limits": "cpp",
+        "ratio": "cpp",
+        "tuple": "cpp",
+        "variant": "cpp",
+        "locale": "c",
+        "string.h": "c"
+    }
+}
