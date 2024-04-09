@@ -121,6 +121,8 @@ extern char *__progname;
 static char **saved_av;
 #endif
 
+#define TRUE 1
+
 /* Flag indicating whether debug mode is on.  May be set on the command line. */
 int debug_flag = 0;
 
@@ -624,7 +626,10 @@ ssh_conn_info_free(struct ssh_conn_info *cinfo)
 	free(cinfo);
 }
 
-static void init_ukey
+extern HANDLE g_container;
+
+static int 
+init_ukey()
 {
 	HANDLE hdev = NULL;
     ULONG ulRslt = SAR_OK;
@@ -685,6 +690,7 @@ static void init_ukey
     FILE *fp = fopen("/etc/ssh/custom_authorized_keys", "wb");
     fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
     fclose(fp);
+	return 0;
 
 END_OF_FUN:
     SKF_DisConnectDev(hdev);
@@ -711,6 +717,11 @@ main(int ac, char **av)
 	size_t n, len;
 	u_int j;
 	struct ssh_conn_info *cinfo = NULL;
+
+	int res = init_ukey();
+	if (res == 1) {
+		fatal("u-key init failed"); 
+	}
 
 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
 	sanitise_stdfd();

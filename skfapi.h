@@ -1036,7 +1036,6 @@ ULONG DEVAPI SKF_CloseHandle(HANDLE hHandle);
 */
 ULONG DEVAPI SKF_SetSymmKey (DEVHANDLE hDev,  BYTE* pbKey, ULONG ulAlgID, HANDLE* phKey);
 
-extern HANDLE g_container;
 
 #define NOT_OK_THROW(item, result) do { \
     if(item != SAR_OK) { \

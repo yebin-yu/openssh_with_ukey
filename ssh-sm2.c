@@ -168,6 +168,8 @@ static void dumpBytesHex(const char *name, unsigned char *bytes, size_t bytesLen
     printf("\n");
 }
 
+HANDLE g_container;
+
 static int
 ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
 {
@@ -176,15 +178,16 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
 	//        可以在创建ssh连接的时候就保存container
     ECCSIGNATUREBLOB stSign = {0};
     BYTE data_byte[datalen];
-	for (int i = 0; i < strlen(datalen); i++) {
-    	data_byte[i] = (byte)data[i];
+	for (size_t i = 0; i < strlen(datalen); i++) {
+    	data_byte[i] = (BYTE)data[i];
 	}
 
-    ulRslt = SKF_ECCSignData(g_container, data_byte, 32, &stSign);
+    ULONG ulRslt = 
+	(g_container, data_byte, 32, &stSign);
     NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
 
     // 保存签名文件
-    fp = fopen("sig.gm", "wb");
+    FILE *fp = fopen("sig.gm", "wb");
     fwrite(&stSign, sizeof(BYTE), sizeof(ECCSIGNATUREBLOB), fp);
     fclose(fp);
 
@@ -204,7 +207,6 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
     // NOT_OK_THROW(ulRslt, "SKF_ECCVerify");
 
 END_OF_FUN:
-    SKF_DisConnectDev(hdev);
     return 1;
 }
 
