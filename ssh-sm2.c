@@ -178,12 +178,9 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
 	//        可以在创建ssh连接的时候就保存container
     ECCSIGNATUREBLOB stSign = {0};
     BYTE data_byte[datalen];
-	for (size_t i = 0; i < strlen(datalen); i++) {
-    	data_byte[i] = (BYTE)data[i];
-	}
+	memcpy(data_byte, data, datalen);
 
-    ULONG ulRslt = 
-	(g_container, data_byte, 32, &stSign);
+    ULONG ulRslt = (g_container, data_byte, 32, &stSign);
     NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
 
     // 保存签名文件
@@ -230,34 +227,44 @@ ssh_sm2_sign(struct sshkey *key,
 		*sigp = NULL;
 
 	if (key == NULL || key->ecdsa == NULL ||
-		sshkey_type_plain(key->type) != KEY_SM2)
+		sshkey_type_plain(key->type) != KEY_SM2) {
+		printf("ERROR: SSH_ERR_INVALID_ARGUMENT! \n");
 		return SSH_ERR_INVALID_ARGUMENT;
+	}
 
 	// 初始化key_sm2，获取最终签名的长度，得修改。
 	// 【签名部分】获取sig，也就是签名内容，内容在sig中
 	size_t slen = sizeof(ECCSIGNATUREBLOB);
-	if ((sig = OPENSSL_malloc(sizeof(ECCSIGNATUREBLOB))) == NULL) {
+	prinf("INFO: start to OPENSSL_malloc %zu\n", slen);
+	if ((sig = OPENSSL_malloc(slen)) == NULL) {
+		printf("ERROR: OPENSSL_malloc failed! \n");
 		ret = SSH_ERR_ALLOC_FAIL;
 		goto out;
 	}
 
 	if (ret = ukey_get_sig(data, datalen, sig, &slen)) {
+		printf("ERROR: ukey_get_sig failed! \n");
 		goto out;
 	}
     
+	printf("====== sig len: %zu \n", slen);
 	// 把签名内容存在b中
 	if ((b = sshbuf_new()) == NULL) {
+		printf("ERROR: sshbuf_new  failed! \n");
 		ret = SSH_ERR_ALLOC_FAIL;
 		goto out;
 	}
 	if ((r = sshbuf_put_cstring(b, "sm2")) != 0 ||
-		(r = sshbuf_put_string(b, sig, slen)) != 0)
-		goto out;
+		(r = sshbuf_put_string(b, sig, slen)) != 0) {
+			printf("ERROR: sshbuf_put_string or sshbuf_put_cstring failed! \n");
+			goto out;
+		}
 	
 	// 把签名存到b中，再把b拷贝到*sigp中
 	len = sshbuf_len(b);
 	if (sigp != NULL) {
 		if ((*sigp = malloc(len)) == NULL) {
+			printf("ERROR: *sigp = malloc(len) failed! \n");
 			ret = SSH_ERR_ALLOC_FAIL;
 			goto out;
 		}
