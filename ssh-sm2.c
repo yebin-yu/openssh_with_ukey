@@ -235,7 +235,7 @@ ssh_sm2_sign(struct sshkey *key,
 	// 初始化key_sm2，获取最终签名的长度，得修改。
 	// 【签名部分】获取sig，也就是签名内容，内容在sig中
 	size_t slen = sizeof(ECCSIGNATUREBLOB);
-	prinf("INFO: start to OPENSSL_malloc %zu\n", slen);
+	printf("INFO: start to OPENSSL_malloc %zu\n", slen);
 	if ((sig = OPENSSL_malloc(slen)) == NULL) {
 		printf("ERROR: OPENSSL_malloc failed! \n");
 		ret = SSH_ERR_ALLOC_FAIL;
