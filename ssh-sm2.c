@@ -180,7 +180,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
     BYTE data_byte[datalen];
 	memcpy(data_byte, data, datalen);
 
-    ULONG ulRslt = (g_container, data_byte, 32, &stSign);
+    ULONG ulRslt = SKF_ECCSignData(g_container, data_byte, 32, &stSign);
     NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
 
     // 保存签名文件
