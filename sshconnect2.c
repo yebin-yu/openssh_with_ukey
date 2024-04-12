@@ -558,10 +558,10 @@ userauth(struct ssh *ssh, char *authlist)
 		    SSH2_MSG_USERAUTH_PER_METHOD_MAX, NULL);
 
 		/* and try new method */
-		if (method->userauth(ssh) != 0) {
+		if (method->userauth(ssh) != 0) {    // here
 			debug2("we sent a %s packet, wait for reply", method->name);
 			break;
-		} else {
+		} else {                             // no private key
 			debug2("we did not send a packet, disable method");
 			method->enabled = NULL;
 		}
@@ -1330,17 +1330,17 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 	int hostbound = 0;
 
 	/* prefer host-bound pubkey signatures if supported by server */
-	if ((ssh->kex->flags & KEX_HAS_PUBKEY_HOSTBOUND) != 0 &&
-	    (options.pubkey_authentication & SSH_PUBKEY_AUTH_HBOUND) != 0) {
+	if ((ssh->kex->flags & KEX_HAS_PUBKEY_HOSTBOUND) != 0 &&                            // ssh->kex->flags : 4 || ssh->kex->flags : 4
+	    (options.pubkey_authentication & SSH_PUBKEY_AUTH_HBOUND) != 0) {                // options.pubkey_authentication: 3 || SSH_PUBKEY_AUTH_HBOUND: 2
 		hostbound = 1;
 		method = "publickey-hostbound-v00@openssh.com";
 	}
 
-	if ((fp = sshkey_fingerprint(id->key, options.fingerprint_hash,
+	if ((fp = sshkey_fingerprint(id->key, options.fingerprint_hash,                          // options.fingerprint_hash: 2,这里获取了服务器的公钥指纹
 	    SSH_FP_DEFAULT)) == NULL)
 		return 0;
 
-	debug3_f("using %s with %s %s", method, sshkey_type(id->key), fp);
+	debug3_f("using %s with %s %s", method, sshkey_type(id->key), fp);                  // sshkey_type(id->key): "SM2" || method: "publickey-hostbound-v00@openssh.com"
 
 	/*
 	 * If the key is an certificate, try to find a matching private key
@@ -1350,7 +1350,7 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 	 * This will try to set sign_id to the private key that will perform
 	 * the signature.
 	 */
-	if (sshkey_is_cert(id->key)) {
+	if (sshkey_is_cert(id->key)) {                                                       // sshkey_is_cert(id->key): 0
 		TAILQ_FOREACH(private_id, &authctxt->keys, next) {
 			if (sshkey_equal_public(id->key, private_id->key) &&
 			    id->key->type != private_id->key->type) {
@@ -1403,7 +1403,7 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 			error_f("no mutual signature supported");
 			goto out;
 		}
-		debug3_f("signing using %s %s", alg, fp);
+		debug3_f("signing using %s %s", alg, fp);                                      // alg: "SM2" || fp: "SHA256:jSFzbeylqZb1qMjkfNy/Si6Q1dDAowyrNFx8j2Ltya8"
 
 		sshbuf_free(b);
 		if ((b = sshbuf_new()) == NULL)
@@ -1413,20 +1413,20 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 				fatal_fr(r, "sshbuf_putb");
 		} else {
 			if ((r = sshbuf_put_stringb(b,
-			    ssh->kex->session_id)) != 0)
+			    ssh->kex->session_id)) != 0)          // run here
 				fatal_fr(r, "sshbuf_put_stringb");
 		}
 		skip = sshbuf_len(b);
 		if ((r = sshbuf_put_u8(b, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
-		    (r = sshbuf_put_cstring(b, authctxt->server_user)) != 0 ||
-		    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||
-		    (r = sshbuf_put_cstring(b, method)) != 0 ||
-		    (r = sshbuf_put_u8(b, 1)) != 0 ||
-		    (r = sshbuf_put_cstring(b, alg)) != 0 ||
-		    (r = sshkey_puts(id->key, b)) != 0) {
+		    (r = sshbuf_put_cstring(b, authctxt->server_user)) != 0 ||    // "yebinyu"
+		    (r = sshbuf_put_cstring(b, authctxt->service)) != 0 ||        // "ssh-connection"
+		    (r = sshbuf_put_cstring(b, method)) != 0 ||                   //  "publickey-hostbound-v00@openssh.com"
+		    (r = sshbuf_put_u8(b, 1)) != 0 ||       
+		    (r = sshbuf_put_cstring(b, alg)) != 0 ||                    // "SM2"
+		    (r = sshkey_puts(id->key, b)) != 0) {                       // id->key: {type = 8, rsa = 0x0, ecdsa_nid = 1172, ecdsa = 0x560c46362f30 } 其他全是0
 			fatal_fr(r, "assemble signed data");
 		}
-		if (hostbound) {
+		if (hostbound) {                           // hostbound: 1
 			if (ssh->kex->initial_hostkey == NULL) {
 				fatal_f("internal error: initial hostkey "
 				    "not recorded");
@@ -1435,8 +1435,8 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 				fatal_fr(r, "assemble %s hostkey", method);
 		}
 		/* generate signature */
-		r = identity_sign(sign_id, &signature, &slen,
-		    sshbuf_ptr(b), sshbuf_len(b), ssh->compat, alg);
+		r = identity_sign(sign_id, &signature, &slen,                  // b: {d = 0x560c46336650 "", cd = 0x560c46336650 "", size = 287, max_size = 134217728, alloc = 512, readonly = 0, refcount = 1}
+		    sshbuf_ptr(b), sshbuf_len(b), ssh->compat, alg);           // sshbuf_ptr: buf->cd + buf->off  || sshbuf_len(b): buf->size - buf->off
 		if (r == 0)
 			break;
 		else if (r == SSH_ERR_KEY_NOT_FOUND)
@@ -1879,10 +1879,8 @@ userauth_pubkey(struct ssh *ssh)
 			debug("Trying private key: %s", id->filename);
 			id->key = load_identity_file(id);
 			if (id->key != NULL) {
-				if (id->key != NULL) {
-					id->isprivate = 1;
-					sent = sign_and_send_pubkey(ssh, id);
-				}
+				id->isprivate = 1;
+				sent = sign_and_send_pubkey(ssh, id);
 				sshkey_free(id->key);
 				id->key = NULL;
 				id->isprivate = 0;

@@ -662,10 +662,16 @@ init_ukey()
 
     // 验证pin码
     char pinStr[32];
-    ULONG retryCnt = 15;
+    const ULONG retryCntMax = 3;
+	ULONG currentRetryCnt = 0;
     printf("UKEY pin:");
     scanf("%s", pinStr);
-    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCnt);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+    	printf("UKEY pin again:");
+    	scanf("%s", pinStr);
+    	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	}
     NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
 
     // 获取容器名

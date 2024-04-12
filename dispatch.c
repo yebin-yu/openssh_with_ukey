@@ -109,7 +109,7 @@ ssh_dispatch_run(struct ssh *ssh, int mode, volatile sig_atomic_t *done)
 				ssh->dispatch_skip_packets--;
 				continue;
 			}
-			r = (*ssh->dispatch[type])(type, seqnr, ssh);
+			r = (*ssh->dispatch[type])(type, seqnr, ssh);     // here
 			if (r != 0)
 				return r;
 		} else {
