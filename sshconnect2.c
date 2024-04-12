@@ -558,10 +558,10 @@ userauth(struct ssh *ssh, char *authlist)
 		    SSH2_MSG_USERAUTH_PER_METHOD_MAX, NULL);
 
 		/* and try new method */
-		if (method->userauth(ssh) != 0) {
+		if (method->userauth(ssh) != 0) {    // here
 			debug2("we sent a %s packet, wait for reply", method->name);
 			break;
-		} else {
+		} else {                             // no private key
 			debug2("we did not send a packet, disable method");
 			method->enabled = NULL;
 		}
