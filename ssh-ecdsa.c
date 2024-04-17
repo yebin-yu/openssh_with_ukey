@@ -174,7 +174,7 @@ ssh_ecdsa_deserialize_public(const char *ktype, struct sshbuf *b,
 		r = SSH_ERR_LIBCRYPTO_ERROR;
 		goto out;
 	}
-	if ((r = sshbuf_get_eckey(b, key->ecdsa)) != 0)
+	if ((r = sshbuf_get_eckey(b, key->ecdsa)) != 0) // // Py84= failed here
 		goto out;
 	if (sshkey_ec_validate_public(EC_KEY_get0_group(key->ecdsa),
 	    EC_KEY_get0_public_key(key->ecdsa)) != 0) {

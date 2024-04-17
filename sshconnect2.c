@@ -74,6 +74,7 @@
 #include "utf8.h"
 #include "ssh-sk.h"
 #include "sk-api.h"
+#include "skfapi.h"
 
 #ifdef GSSAPI
 #include "ssh-gss.h"
@@ -433,7 +434,7 @@ Authmethod authmethods[] = {
 
 void
 ssh_userauth2(struct ssh *ssh, const char *local_user,
-    const char *server_user, char *host, Sensitive *sensitive)
+    const char *server_user, char *host, Sensitive *sensitive)     // 在这之前，私钥信息已经全部保存到 options.identity_key 中了，包括 -i 和 /root/.ssh/config 中的 IdentityFile
 {
 	Authctxt authctxt;
 	int r;
@@ -461,12 +462,12 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 	authctxt.mech_tried = 0;
 #endif
 	authctxt.agent_fd = -1;
-	pubkey_prepare(ssh, &authctxt);
-	if (authctxt.method == NULL) {
+	pubkey_prepare(ssh, &authctxt);        // 把所有支持的私钥都拿到，然后根据 ssh_config 中 PubkeyAcceptedAlgorithms 进行筛选，只保留支持的。TOOD:怎么在没有私钥的情况下依旧生成identity?
+	if (authctxt.method == NULL) {         // 也就是需要检查在pubkey_prepare之前，options.identity_keys 是怎么补充信息的
 		fatal_f("internal error: cannot send userauth none request");
 	}
 
-	if ((r = sshpkt_start(ssh, SSH2_MSG_SERVICE_REQUEST)) != 0 ||
+	if ((r = sshpkt_start(ssh, SSH2_MSG_SERVICE_REQUEST)) != 0 ||    // 向 server 发送ssh连接请求
 	    (r = sshpkt_put_cstring(ssh, "ssh-userauth")) != 0 ||
 	    (r = sshpkt_send(ssh)) != 0)
 		fatal_fr(r, "send packet");
@@ -474,8 +475,8 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 	ssh->authctxt = &authctxt;
 	ssh_dispatch_init(ssh, &input_userauth_error);
 	ssh_dispatch_set(ssh, SSH2_MSG_EXT_INFO, &input_userauth_ext_info);
-	ssh_dispatch_set(ssh, SSH2_MSG_SERVICE_ACCEPT, &input_userauth_service_accept);
-	ssh_dispatch_run_fatal(ssh, DISPATCH_BLOCK, &authctxt.success);	/* loop until success */
+	ssh_dispatch_set(ssh, SSH2_MSG_SERVICE_ACCEPT, &input_userauth_service_accept);   // 这里设置如果收到 SSH2_MSG_SERVICE_ACCEPT 后，就准备对 USER_AUTH 的结果做dispatch
+	ssh_dispatch_run_fatal(ssh, DISPATCH_BLOCK, &authctxt.success);	                  // 循环执行，直到authctxt.success为true
 	pubkey_cleanup(ssh);
 	ssh->authctxt = NULL;
 
@@ -559,7 +560,7 @@ userauth(struct ssh *ssh, char *authlist)
 
 		/* and try new method */
 		if (method->userauth(ssh) != 0) {    // here
-			debug2("we sent a %s packet, wait for reply", method->name);
+	        debug2("we sent a %s packet, wait for reply", method->name);
 			break;
 		} else {                             // no private key
 			debug2("we did not send a packet, disable method");
@@ -1487,6 +1488,31 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 	return sent;
 }
 
+#include "sshbuf.h"
+#include "sshkey.h"
+
+static int
+get_ec(const u_char *d, size_t len, EC_POINT *v, const EC_GROUP *g)
+{
+	int res = 0;
+	/* Refuse overlong bignums */
+	if (len == 0 || len > SSHBUF_MAX_ECPOINT) {
+		debug("SSHBUF_MAX_ECPOINT curr: %zu, max: %d", len, SSHBUF_MAX_ECPOINT);
+		return SSH_ERR_ECPOINT_TOO_LARGE;
+	}
+	/* Only handle uncompressed points */
+	if (*d != POINT_CONVERSION_UNCOMPRESSED) {
+		debug("POINT_CONVERSION_UNCOMPRESSED");
+		return SSH_ERR_INVALID_FORMAT;
+	}
+
+	if (v != NULL && (res = EC_POINT_oct2point(g, v, d, len, NULL)) != 1) {
+		debug("EC_POINT_oct2point failed! res: %d", res);
+		return SSH_ERR_INVALID_FORMAT +1; /* XXX assumption */
+	}
+	return 0;
+}
+
 static int
 send_pubkey_test(struct ssh *ssh, Identity *id)
 {
@@ -1502,13 +1528,100 @@ send_pubkey_test(struct ssh *ssh, Identity *id)
 		goto out;
 	}
 
-	if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
+	if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) {
+		// FILE *fp = fopen("id_sm2.pub", "rb");
+		// if (fp == NULL) {
+		// 	debug3_f("fopen");
+		// 	goto out;
+		// }
+
+		// fseek(fp, 0, SEEK_END);
+		// long length = ftell(fp);
+		// fseek(fp, 0, SEEK_SET);
+		// unsigned char buffer[65] = {
+		// 	0x04,
+		// 	0x00, 0x0a, 0x37, 0x87, 0xed, 0xe1, 0xdb, 0xc4,
+		// 	 0xe1, 0xc3, 0x89, 0xc9, 0xae, 0x21, 0x37, 0xcb,
+		// 	 0x12, 0x3b, 0x75, 0x94, 0xe4, 0xae, 0x2d, 0xd8, 
+		// 	 0x59, 0xb8, 0x9e, 0x1f, 0xf9, 0x54, 0x65, 0x21,
+		// 	0x00, 0x98, 0x1e, 0x2c, 0x63, 0x5f, 0xb7, 0x29, 
+		// 	 0x57, 0x28, 0xaa, 0x5b, 0xcc, 0xb1, 0x8c, 0x49, 
+		// 	 0xb7, 0x1b, 0xf5, 0x2e, 0xec, 0x22, 0x6a, 0xbc, 
+		// 	 0x91, 0x52, 0x15, 0x3f, 0x83, 0x8f, 0xcb, 0xce};
+		// unsigned char *buffer = "04000a3787ede1dbc4e1c389c9ae2137cb123b7594e4ae2dd859b89e1ff954652100981e2c635fb7295728aa5bccb18c49b71bf52eec226abc9152153f838fcbce";
+		
+		
+		// unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBAAKN4ft4dvE4cOJya4hN8sSO3WU5K4t2Fm4nh/5VGUhAJgeLGNftylXKKpbzLGMSbcb9S7sImq8kVIVP4OPy84= root@yebinyu";  // 沛冉提供的ukey公钥
+		// unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBDFm8NOcCa/yaI7pVJuGpqbUuToMLREOl5+WhWYRV8FD/DDtRFPMiIdvWWHEG+71ZRc4Hagx93B3H05X/thNiOE= root@yebinyu";  // ssh-keygen生成的
+		unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBDFm8NOcCa/yaI7pVJuGpqbUuToMLREOl5+WhWYRV8FD/DDtRFPMiIdvWWHEG+71ZRc4Hagx93B3H05X/thNiOE= root@yebinyu";
+		
+		long length = sizeof(buffer);
+		// buffer = malloc(length);
+		// if (buffer == NULL) {
+		// 	debug3_f("malloc");
+		// 	fclose(fp);
+		// 	goto out;
+		// }
+		// fread(buffer, 1, length, fp);
+		// fclose(fp);
+
+
+
+		struct sshkey *key = sshkey_new(KEY_SM2);
+		if (sshkey_read(key, &buffer) != 0) {
+			debug("sshkey_read failed");
+			return SSH_ERR_ALLOC_FAIL; // TODO
+		}
+		// key->ecdsa = EC_KEY_new_by_curve_name(NID_sm2);
+		// EC_POINT *pt = EC_POINT_new(EC_KEY_get0_group(key->ecdsa));
+		// if (pt == NULL) {
+		// 	debug("EC_POINT_new failed");
+		// 	// SSHBUF_DBG(("SSH_ERR_ALLOC_FAIL"));
+		// 	return SSH_ERR_ALLOC_FAIL; // TODO
+		// }
+		// if ((r = get_ec(buffer, length, pt, EC_KEY_get0_group(key->ecdsa))) != 0) {
+		// 	debug("get_ec failed");
+		// 	EC_POINT_free(pt);
+		// 	return r;
+		// }
+		// if (EC_KEY_set_public_key(key->ecdsa, pt) != 1) {
+		// 	debug("EC_KEY_set_public_key failed");
+		// 	EC_POINT_free(pt);
+		// 	return SSH_ERR_ALLOC_FAIL; /* XXX assumption */
+		// }
+		// EC_POINT_free(pt);
+
+
+
+
+		// sshbuf_get_eckey
+		// key = sshkey_from_blob(buffer,length, NULL);
+		// if (key == NULL) {
+		// 	debug3_f("ssh_key_from_string failed\n");
+		// 	free(buffer);
+		// 	goto out;
+		// }
+
+		if ((r = sshkey_to_blob(key, &blob, &bloblen)) != 0) {
+			/* we cannot handle this key */
+			debug3_f("yyb cannot handle key");
+			goto out;
+		}
+
+		// debug3_f("try to copy pubkey to blob");
+		// bloblen = sizeof(ECCPUBLICKEYBLOB);
+		// if ((blob = malloc(bloblen)) == NULL) {
+		// 	debug3_f("malloc blob failed");
+		// 	goto out;
+		// }
+		// memcpy(ukey_blob, blob, bloblen);
+	} else if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
 		/* we cannot handle this key */
 		debug3_f("cannot handle key");
 		goto out;
 	}
 	/* register callback for USERAUTH_PK_OK message */
-	ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_PK_OK, &input_userauth_pk_ok);
+	ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_PK_OK, &input_userauth_pk_ok);  // 如果收到SSH2_MSG_USERAUTH_PK_OK，也就是测试数据通过，那么就去 input_userauth_pk_ok 直接发签名数据了
 
 	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->server_user)) != 0 ||
@@ -1685,13 +1798,13 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 	struct ssh_identitylist *idlist;
 	char *ident;
 
-	TAILQ_INIT(&agent);	/* keys from the agent */
+	TAILQ_INIT(&agent);	/* keys from the agcent */
 	TAILQ_INIT(&files);	/* keys from the config file */
 	preferred = &authctxt->keys;
 	TAILQ_INIT(preferred);	/* preferred order of keys */
 
 	/* list of keys stored in the filesystem and PKCS#11 */
-	for (i = 0; i < options.num_identity_files; i++) {
+	for (i = 0; i < options.num_identity_files; i++) {          // 用的是这个
 		key = options.identity_keys[i];
 		if (key && key->cert &&
 		    key->cert->type != SSH2_CERT_TYPE_USER) {
@@ -1714,7 +1827,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 		TAILQ_INSERT_TAIL(&files, id, next);
 	}
 	/* list of certificates specified by user */
-	for (i = 0; i < options.num_certificate_files; i++) {
+	for (i = 0; i < options.num_certificate_files; i++) {       // 0 
 		key = options.certificates[i];
 		if (!sshkey_is_cert(key) || key->cert == NULL ||
 		    key->cert->type != SSH2_CERT_TYPE_USER) {
@@ -1737,7 +1850,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 		TAILQ_INSERT_TAIL(preferred, id, next);
 	}
 	/* list of keys supported by the agent */
-	if ((r = get_agent_identities(ssh, &agent_fd, &idlist)) == 0) {
+	if ((r = get_agent_identities(ssh, &agent_fd, &idlist)) == 0) {  // 0
 		for (j = 0; j < idlist->nkeys; j++) {
 			if ((r = sshkey_check_rsa_length(idlist->keys[j],
 			    options.required_rsa_size)) != 0) {
@@ -1801,7 +1914,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 	TAILQ_CONCAT(preferred, &files, next);
 	/* finally, filter by PubkeyAcceptedAlgorithms */
 	TAILQ_FOREACH_SAFE(id, preferred, next, id2) {
-		if (id->key != NULL && !key_type_allowed_by_config(id->key)) {
+		if (id->key != NULL && !key_type_allowed_by_config(id->key)) {   // 这里还会校验esdsa_nid
 			debug("Skipping %s key %s - "
 			    "corresponding algo not in PubkeyAcceptedAlgorithms",
 			    sshkey_ssh_name(id->key), id->filename);
@@ -1873,7 +1986,7 @@ userauth_pubkey(struct ssh *ssh)
 				ident = format_identity(id);
 				debug("Offering public key: %s", ident);
 				free(ident);
-				sent = send_pubkey_test(ssh, id);
+				sent = send_pubkey_test(ssh, id);    // 这里应该是尝试发送一个加密后的数据，但是不给公钥，测试下服务器能不能解析出来 | 但看代码也没看到有加密的逻辑，待确认
 			}
 		} else {
 			debug("Trying private key: %s", id->filename);
@@ -1884,7 +1997,7 @@ userauth_pubkey(struct ssh *ssh)
 				sshkey_free(id->key);
 				id->key = NULL;
 				id->isprivate = 0;
-			}
+			}  // else if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) { sent = sign_and_send_pubkey_ukey(ssh); }
 		}
 		if (sent)
 			return (sent);
@@ -1904,7 +2017,7 @@ userauth_kbdint(struct ssh *ssh)
 	if (authctxt->attempt_kbdint++ >= options.number_of_password_prompts)
 		return 0;
 	/* disable if no SSH2_MSG_USERAUTH_INFO_REQUEST has been seen */
-	if (authctxt->attempt_kbdint > 1 && !authctxt->info_req_seen) {
+	if (authctxt->attempt_kbdint > 1 && !authctxt->info_req_seen) { // TODO 这里报错,但这样应该是publickey失败才走到的验证流程
 		debug3("userauth_kbdint: disable: no info_req_seen");
 		ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_INFO_REQUEST, NULL);
 		return 0;

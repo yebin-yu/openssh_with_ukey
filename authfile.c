@@ -216,8 +216,19 @@ sshkey_try_load_public(struct sshkey **kp, const char *filename,
 	*kp = NULL;
 	if (commentp != NULL)
 		*commentp = NULL;
-	if ((f = fopen(filename, "r")) == NULL)
+	if ((f = fopen(filename, "r")) == NULL) {
+	 	if (strcmp(filename, "/root/.ssh/id_sm2") == 0) {
+			if ((*kp = sshkey_new(KEY_UNSPEC)) == NULL) {
+				return SSH_ERR_ALLOC_FAIL;
+			} else {
+				const int sm2_type = KEY_SM2;
+				(*(*kp)).type = sm2_type;
+				(*(*kp)).ecdsa_nid = NID_sm2;
+				return 0;
+			}
+		}
 		return SSH_ERR_SYSTEM_ERROR;
+	}
 	if ((k = sshkey_new(KEY_UNSPEC)) == NULL) {
 		fclose(f);
 		return SSH_ERR_ALLOC_FAIL;

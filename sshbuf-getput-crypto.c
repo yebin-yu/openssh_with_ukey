@@ -65,8 +65,13 @@ get_ec(const u_char *d, size_t len, EC_POINT *v, const EC_GROUP *g)
 	/* Only handle uncompressed points */
 	if (*d != POINT_CONVERSION_UNCOMPRESSED)
 		return SSH_ERR_INVALID_FORMAT;
-	if (v != NULL && EC_POINT_oct2point(g, v, d, len, NULL) != 1)
-		return SSH_ERR_INVALID_FORMAT; /* XXX assumption */
+	if (v != NULL) {
+		int res = EC_POINT_oct2point(g, v, d, len, NULL);
+		if (res != 1) {
+			printf("%d", res);
+			return res; /* XXX assumption */
+		}
+	}
 	return 0;
 }
 

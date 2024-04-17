@@ -639,7 +639,7 @@ init_ukey()
     char szDevName[256] = {0}; 
     ULONG ulDevNameLen = 256;
     ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
-    printf("szDevName: %s", szDevName);
+    printf("szDevName: %s \n", szDevName);
     NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
 
     // 连接设备
@@ -652,7 +652,7 @@ init_ukey()
     char appName[256] = {0}; 
     ULONG appnameLen = 256;
     ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
-    printf("appName: %s", appName);
+    printf("appName: %s\n", appName);
     NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
 
     // 打开应用
@@ -662,7 +662,7 @@ init_ukey()
 
     // 验证pin码
     char pinStr[32];
-    const ULONG retryCntMax = 3;
+    ULONG retryCntMax = 3;
 	ULONG currentRetryCnt = 0;
     printf("UKEY pin:");
     scanf("%s", pinStr);
@@ -679,7 +679,7 @@ init_ukey()
     char containerName[256] = {0};
     ULONG containerNameLen = 256;
     ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
-    printf("containerName: %s", containerName);
+    printf("containerName: %s\n", containerName);
     NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
 
     // 打开容器
@@ -692,9 +692,9 @@ init_ukey()
     ulRslt = SKF_ExportPublicKey(g_container, TRUE, buf, &bufLen);
     NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
 
-    ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
+    ECCPUBLICKEYBLOB *ukey_blob = (ECCPUBLICKEYBLOB *)buf;
     FILE *fp = fopen("/etc/ssh/custom_authorized_keys", "wb");
-    fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
+    fwrite(ukey_blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
     fclose(fp);
 	return 0;
 
@@ -2371,13 +2371,13 @@ load_public_identity_files(const struct ssh_conn_info *cinfo)
 		cp = tilde_expand_filename(options.identity_files[i], getuid());
 		filename = default_client_percent_dollar_expand(cp, cinfo);
 		free(cp);
-		check_load(sshkey_load_public(filename, &public, NULL),
+		check_load(sshkey_load_public(filename, &public, NULL),  // check_load发现SSH_ERR_SYSTEM_ERROR，文件不存在，无打印
 		    &public, filename, "pubkey");
 		debug("identity file %s type %d", filename,
 		    public ? public->type : -1);
 		free(options.identity_files[i]);
 		identity_files[n_ids] = filename;
-		identity_keys[n_ids] = public;
+		identity_keys[n_ids] = public;   // 这里赋值的，得修改sshkey_load_public函数。
 		identity_file_userprovided[n_ids] =
 		    options.identity_file_userprovided[i];
 		if (++n_ids >= SSH_MAX_IDENTITY_FILES)
