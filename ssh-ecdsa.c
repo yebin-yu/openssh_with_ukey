@@ -176,7 +176,7 @@ ssh_ecdsa_deserialize_public(const char *ktype, struct sshbuf *b,
 	}
 	if ((r = sshbuf_get_eckey(b, key->ecdsa)) != 0) // // Py84= failed here
 		goto out;
-	if (sshkey_ec_validate_public(EC_KEY_get0_group(key->ecdsa),
+	if (sshkey_ec_validate_public(EC_KEY_get0_group(key->ecdsa), // 端序转换后，在这里失败 EC_POINT_is_at_infinity 返回0，说明这个点不在无穷处
 	    EC_KEY_get0_public_key(key->ecdsa)) != 0) {
 		r = SSH_ERR_KEY_INVALID_EC_VALUE;
 		goto out;
@@ -305,7 +305,7 @@ ssh_ecdsa_verify(const struct sshkey *key,
 
 	if (key == NULL || key->ecdsa == NULL ||
 	    (sshkey_type_plain(key->type) != KEY_ECDSA &&
-+	     sshkey_type_plain(key->type) != KEY_SM2) ||
+	     sshkey_type_plain(key->type) != KEY_SM2) ||
 	    sig == NULL || siglen == 0)
 		return SSH_ERR_INVALID_ARGUMENT;
 

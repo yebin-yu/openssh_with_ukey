@@ -1211,6 +1211,205 @@ key_sig_algorithm(struct ssh *ssh, const struct sshkey *key)
 	return alg;
 }
 
+#include "skfapi.h"
+#define TRUE 1
+
+void SM2_gmSig2OpensslSig(ECCSIGNATUREBLOB *sigBlob, unsigned char **sig, size_t *len)
+{
+    BIGNUM *rB=NULL;
+    BIGNUM *sB=NULL;
+
+    BYTE *r = sigBlob->r+32;
+    BYTE *s = sigBlob->s+32;
+    
+    rB = BN_bin2bn(r, 32, NULL);
+    if(rB == NULL) {return NULL;}
+    sB = BN_bin2bn(s, 32, NULL);
+    if(sB == NULL) {return NULL;}
+
+    ECDSA_SIG *ecdsaSig = ECDSA_SIG_new();
+    if (ecdsaSig == NULL) {return NULL;}
+
+    if(ECDSA_SIG_set0(ecdsaSig, rB, sB) != 1) {
+        return NULL;
+    }
+
+    unsigned char* sig_temp = NULL;
+    int sigLen = i2d_ECDSA_SIG(ecdsaSig, sig);
+	// *sig = sig_temp;
+	printf("%s", *sig);
+    *len = sigLen;
+}
+
+static int
+ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
+{	
+	HANDLE hdev = NULL;
+    ULONG ulRslt = SAR_OK;
+	HANDLE container;
+
+    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    char szDevName[256] = {0}; 
+    ULONG ulDevNameLen = 256;
+    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+    printf("szDevName: %s \n", szDevName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumDev ERROR \n");
+		return 1;
+	}
+
+    // 连接设备
+    // sleep(2);
+    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ConnectDev ERROR \n");
+		return 1;
+	}
+
+    // 获取application，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：GM3000RSA
+    char appName[256] = {0}; 
+    ULONG appnameLen = 256;
+    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    printf("appName: %s\n", appName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumApplication ERROR \n");
+		return 1;
+	}
+
+    // 打开应用
+    HANDLE happ;
+    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenApplication ERROR \n");
+		return 1;
+	}
+
+    // 验证pin码
+    char pinStr[32];
+    ULONG retryCntMax = 3;
+	ULONG currentRetryCnt = 0;
+    printf("UKEY pin:");
+    scanf("%s", pinStr);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+    	printf("UKEY pin again:");
+    	scanf("%s", pinStr);
+    	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	}
+	if (ulRslt != SAR_OK) {
+		debug("SKF_VerifyPIN ERROR \n");
+		return 1;
+	}
+
+    // 获取容器名
+	// ukey上获取到的值应该为：sm2
+    char containerName[256] = {0};
+    ULONG containerNameLen = 256;
+    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+    printf("containerName: %s\n", containerName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumContainer ERROR \n");
+		return 1;
+	}
+
+    // 打开容器
+    ulRslt = SKF_OpenContainer(happ, containerName, &container);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenContainer ERROR \n");
+		return 1;
+	}
+
+	// hash
+	unsigned char hashRslt[32] = {0};
+	int hashLen;
+	if(1 != EVP_Digest(data, datalen, hashRslt, &hashLen, EVP_sm3(), NULL)) {
+		debug("EVP_DigestFinal_ex ERROR \n");
+		return 1;
+
+	}
+
+    ECCSIGNATUREBLOB stSign = {0};
+    // BYTE data_byte[datalen];
+	// memcpy(data_byte, data, datalen);
+
+    ulRslt = SKF_ECCSignData(container, hashRslt, hashLen, &stSign);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ECCSignData ERROR \n");
+		return 1;
+	}
+
+	// int siglen = 0;
+	SM2_gmSig2OpensslSig(&stSign, sig, slen);
+	return 0;
+}
+
+static int
+ssh_sm2_sign_sm2(struct sshkey *key,
+   u_char **sigp, size_t *lenp,
+   const u_char *data, size_t datalen,
+   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+{
+	// int pkey_len = 0;
+	int r = 0;
+	int len = 0;
+	struct sshbuf *b = NULL;
+	int ret = SSH_ERR_INTERNAL_ERROR;
+	u_char *sig = NULL;
+	size_t slen = 0;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	// if ((sig = OPENSSL_malloc(71)) == NULL) {
+	// 	ret = SSH_ERR_ALLOC_FAIL;
+	// 	goto out;
+	// }
+
+	// 获取签名
+	if ((ret = ukey_get_sig(data, datalen, &sig, &slen)) != 0) {
+		printf("ERROR: ukey_get_sig failed! \n");
+		goto out;
+	}
+    
+	printf("====== sig len: %zu \n", slen);
+	// 把签名内容存在b中
+	if ((b = sshbuf_new()) == NULL) {
+		printf("ERROR: sshbuf_new  failed! \n");
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_cstring(b, "sm2")) != 0 ||
+		(r = sshbuf_put_string(b, sig, slen)) != 0) {
+			printf("ERROR: sshbuf_put_string or sshbuf_put_cstring failed! \n");
+			goto out;
+		}
+	
+	// 把签名存到b中，再把b拷贝到*sigp中
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			printf("ERROR: *sigp = malloc(len) failed! \n");
+			ret = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+			*lenp = len;
+	ret = 0;
+
+out:
+	if (sig != NULL) {
+		explicit_bzero(sig, slen);
+		OPENSSL_free(sig);
+	}
+	sshbuf_free(b);
+	return ret;
+}
 static int
 identity_sign(struct identity *id, u_char **sigp, size_t *lenp,
     const u_char *data, size_t datalen, u_int compat, const char *alg)
@@ -1237,6 +1436,43 @@ identity_sign(struct identity *id, u_char **sigp, size_t *lenp,
 	    (id->isprivate || (id->key->flags & SSHKEY_FLAG_EXT))) {
 		sign_key = id->key;
 		is_agent = 1;
+	} else if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) {
+sm2_retry_pin:
+		/* Prompt for touch for non-agent FIDO keys that request UP */
+		if (!is_agent && sshkey_is_sk(sign_key) &&
+			(sign_key->sk_flags & SSH_SK_USER_PRESENCE_REQD)) {
+			/* XXX should batch mode just skip these? */
+			if ((fp = sshkey_fingerprint(sign_key,
+				options.fingerprint_hash, SSH_FP_DEFAULT)) == NULL)
+				fatal_f("fingerprint failed");
+			notifier = notify_start(options.batch_mode,
+				"Confirm user presence for key %s %s",
+				sshkey_type(sign_key), fp);
+			free(fp);
+		}
+		if ((r = ssh_sm2_sign_sm2(id->key, sigp, lenp, data, datalen, alg, options.sk_provider, pin, compat)) != 0) {
+			if (!retried && pin == NULL && !is_agent &&
+				sshkey_is_sk(sign_key) &&
+				r == SSH_ERR_KEY_WRONG_PASSPHRASE) {
+				notify_complete(notifier, NULL);
+				notifier = NULL;
+				xasprintf(&prompt, "Enter PIN for %s key %s: ",
+					sshkey_type(sign_key), id->filename);
+				pin = read_passphrase(prompt, 0);
+				retried = 1;
+				goto sm2_retry_pin;
+			}
+			goto out;
+		}
+		debug("ssh_sm2_sign_sm2 return : %d \n", r);
+		if ((r = sshkey_check_sigtype(*sigp, *lenp, alg)) != 0) {
+			debug_fr(r, "sshkey_check_sigtype");
+			goto out;
+		}
+		
+		/* success */
+		r = 0;
+		goto out;
 	} else {
 		/* Load the private key from the file. */
 		if ((prv = load_identity_file(id)) == NULL)
@@ -1488,31 +1724,6 @@ sign_and_send_pubkey(struct ssh *ssh, Identity *id)
 	return sent;
 }
 
-#include "sshbuf.h"
-#include "sshkey.h"
-
-static int
-get_ec(const u_char *d, size_t len, EC_POINT *v, const EC_GROUP *g)
-{
-	int res = 0;
-	/* Refuse overlong bignums */
-	if (len == 0 || len > SSHBUF_MAX_ECPOINT) {
-		debug("SSHBUF_MAX_ECPOINT curr: %zu, max: %d", len, SSHBUF_MAX_ECPOINT);
-		return SSH_ERR_ECPOINT_TOO_LARGE;
-	}
-	/* Only handle uncompressed points */
-	if (*d != POINT_CONVERSION_UNCOMPRESSED) {
-		debug("POINT_CONVERSION_UNCOMPRESSED");
-		return SSH_ERR_INVALID_FORMAT;
-	}
-
-	if (v != NULL && (res = EC_POINT_oct2point(g, v, d, len, NULL)) != 1) {
-		debug("EC_POINT_oct2point failed! res: %d", res);
-		return SSH_ERR_INVALID_FORMAT +1; /* XXX assumption */
-	}
-	return 0;
-}
-
 static int
 send_pubkey_test(struct ssh *ssh, Identity *id)
 {
@@ -1528,94 +1739,7 @@ send_pubkey_test(struct ssh *ssh, Identity *id)
 		goto out;
 	}
 
-	if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) {
-		// FILE *fp = fopen("id_sm2.pub", "rb");
-		// if (fp == NULL) {
-		// 	debug3_f("fopen");
-		// 	goto out;
-		// }
-
-		// fseek(fp, 0, SEEK_END);
-		// long length = ftell(fp);
-		// fseek(fp, 0, SEEK_SET);
-		// unsigned char buffer[65] = {
-		// 	0x04,
-		// 	0x00, 0x0a, 0x37, 0x87, 0xed, 0xe1, 0xdb, 0xc4,
-		// 	 0xe1, 0xc3, 0x89, 0xc9, 0xae, 0x21, 0x37, 0xcb,
-		// 	 0x12, 0x3b, 0x75, 0x94, 0xe4, 0xae, 0x2d, 0xd8, 
-		// 	 0x59, 0xb8, 0x9e, 0x1f, 0xf9, 0x54, 0x65, 0x21,
-		// 	0x00, 0x98, 0x1e, 0x2c, 0x63, 0x5f, 0xb7, 0x29, 
-		// 	 0x57, 0x28, 0xaa, 0x5b, 0xcc, 0xb1, 0x8c, 0x49, 
-		// 	 0xb7, 0x1b, 0xf5, 0x2e, 0xec, 0x22, 0x6a, 0xbc, 
-		// 	 0x91, 0x52, 0x15, 0x3f, 0x83, 0x8f, 0xcb, 0xce};
-		// unsigned char *buffer = "04000a3787ede1dbc4e1c389c9ae2137cb123b7594e4ae2dd859b89e1ff954652100981e2c635fb7295728aa5bccb18c49b71bf52eec226abc9152153f838fcbce";
-		
-		
-		// unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBAAKN4ft4dvE4cOJya4hN8sSO3WU5K4t2Fm4nh/5VGUhAJgeLGNftylXKKpbzLGMSbcb9S7sImq8kVIVP4OPy84= root@yebinyu";  // 沛冉提供的ukey公钥
-		// unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBDFm8NOcCa/yaI7pVJuGpqbUuToMLREOl5+WhWYRV8FD/DDtRFPMiIdvWWHEG+71ZRc4Hagx93B3H05X/thNiOE= root@yebinyu";  // ssh-keygen生成的
-		unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBDFm8NOcCa/yaI7pVJuGpqbUuToMLREOl5+WhWYRV8FD/DDtRFPMiIdvWWHEG+71ZRc4Hagx93B3H05X/thNiOE= root@yebinyu";
-		
-		long length = sizeof(buffer);
-		// buffer = malloc(length);
-		// if (buffer == NULL) {
-		// 	debug3_f("malloc");
-		// 	fclose(fp);
-		// 	goto out;
-		// }
-		// fread(buffer, 1, length, fp);
-		// fclose(fp);
-
-
-
-		struct sshkey *key = sshkey_new(KEY_SM2);
-		if (sshkey_read(key, &buffer) != 0) {
-			debug("sshkey_read failed");
-			return SSH_ERR_ALLOC_FAIL; // TODO
-		}
-		// key->ecdsa = EC_KEY_new_by_curve_name(NID_sm2);
-		// EC_POINT *pt = EC_POINT_new(EC_KEY_get0_group(key->ecdsa));
-		// if (pt == NULL) {
-		// 	debug("EC_POINT_new failed");
-		// 	// SSHBUF_DBG(("SSH_ERR_ALLOC_FAIL"));
-		// 	return SSH_ERR_ALLOC_FAIL; // TODO
-		// }
-		// if ((r = get_ec(buffer, length, pt, EC_KEY_get0_group(key->ecdsa))) != 0) {
-		// 	debug("get_ec failed");
-		// 	EC_POINT_free(pt);
-		// 	return r;
-		// }
-		// if (EC_KEY_set_public_key(key->ecdsa, pt) != 1) {
-		// 	debug("EC_KEY_set_public_key failed");
-		// 	EC_POINT_free(pt);
-		// 	return SSH_ERR_ALLOC_FAIL; /* XXX assumption */
-		// }
-		// EC_POINT_free(pt);
-
-
-
-
-		// sshbuf_get_eckey
-		// key = sshkey_from_blob(buffer,length, NULL);
-		// if (key == NULL) {
-		// 	debug3_f("ssh_key_from_string failed\n");
-		// 	free(buffer);
-		// 	goto out;
-		// }
-
-		if ((r = sshkey_to_blob(key, &blob, &bloblen)) != 0) {
-			/* we cannot handle this key */
-			debug3_f("yyb cannot handle key");
-			goto out;
-		}
-
-		// debug3_f("try to copy pubkey to blob");
-		// bloblen = sizeof(ECCPUBLICKEYBLOB);
-		// if ((blob = malloc(bloblen)) == NULL) {
-		// 	debug3_f("malloc blob failed");
-		// 	goto out;
-		// }
-		// memcpy(ukey_blob, blob, bloblen);
-	} else if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
+	 if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
 		/* we cannot handle this key */
 		debug3_f("cannot handle key");
 		goto out;

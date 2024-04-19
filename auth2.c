@@ -757,7 +757,7 @@ auth2_record_key(Authctxt *authctxt, int authenticated,
 	struct sshkey **tmp, *dup;
 	int r;
 
-	if ((r = sshkey_from_private(key, &dup)) != 0)
+	if ((r = sshkey_from_private(key, &dup)) != 0)     // 这里失败了
 		fatal_fr(r, "copy key");
 	sshkey_free(authctxt->auth_method_key);
 	authctxt->auth_method_key = dup;
