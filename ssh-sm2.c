@@ -13,7 +13,6 @@
 #include "ssherr.h"
 #include "digest.h"
 #include "sshkey.h"
-#include "skfapi.h"
 
 #include "openbsd-compat/openssl-compat.h"
 
@@ -168,124 +167,8 @@ static void dumpBytesHex(const char *name, unsigned char *bytes, size_t bytesLen
     printf("\n");
 }
 
-HANDLE g_container;
-
-static int
-ukey_get_sig(const u_char *data, size_t datalen, u_char *sig, size_t *slen)
-{
-    // 尝试签名
-	// FIXME: 签名需要的是hcontainer，是否需要每次都重新获取？
-	//        可以在创建ssh连接的时候就保存container
-    ECCSIGNATUREBLOB stSign = {0};
-    BYTE data_byte[datalen];
-	memcpy(data_byte, data, datalen);
-
-    ULONG ulRslt = SKF_ECCSignData(g_container, data_byte, 32, &stSign);
-    NOT_OK_THROW(ulRslt, "SKF_ECCSignData");
-
-    // 保存签名文件
-    FILE *fp = fopen("sig.gm", "wb");
-    fwrite(&stSign, sizeof(BYTE), sizeof(ECCSIGNATUREBLOB), fp);
-    fclose(fp);
-
-	fp = fopen("sig.gm", "r");
-	size_t n = fread(sig, 1, sizeof(ECCSIGNATUREBLOB), fp);
-	fclose(fp);
-
-	// 打印看公钥和签名信息 -> 实际不需要
-    // dumpBytesHex("x: ", blob->XCoordinate, sizeof(blob->XCoordinate));
-    // dumpBytesHex("y: ", blob->YCoordinate, sizeof(blob->YCoordinate));
-
-    // dumpBytesHex("r: ", stSign.r, sizeof(stSign.r));
-    // dumpBytesHex("s: ", stSign.s, sizeof(stSign.s));
-
-    // 验证签名 -> 这里也不需要
-    // ulRslt = SKF_ECCVerify(hdev, blob, data, 32, &stSign);
-    // NOT_OK_THROW(ulRslt, "SKF_ECCVerify");
-
-END_OF_FUN:
-    return 1;
-}
-
 static int
 ssh_sm2_sign(struct sshkey *key,
-   u_char **sigp, size_t *lenp,
-   const u_char *data, size_t datalen,
-   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
-{
-	u_char *sig = NULL;
-	int pkey_len = 0;
-	int r = 0;
-	int len = 0;
-	EVP_PKEY *key_sm2 = NULL;
-	struct sshbuf *b = NULL;
-	int ret = SSH_ERR_INTERNAL_ERROR;
-
-	if (lenp != NULL)
-		*lenp = 0;
-	if (sigp != NULL)
-		*sigp = NULL;
-
-	if (key == NULL || key->ecdsa == NULL ||
-		sshkey_type_plain(key->type) != KEY_SM2) {
-		printf("ERROR: SSH_ERR_INVALID_ARGUMENT! \n");
-		return SSH_ERR_INVALID_ARGUMENT;
-	}
-
-	// 初始化key_sm2，获取最终签名的长度，得修改。
-	// 【签名部分】获取sig，也就是签名内容，内容在sig中
-	size_t slen = sizeof(ECCSIGNATUREBLOB);
-	printf("INFO: start to OPENSSL_malloc %zu\n", slen);
-	if ((sig = OPENSSL_malloc(slen)) == NULL) {
-		printf("ERROR: OPENSSL_malloc failed! \n");
-		ret = SSH_ERR_ALLOC_FAIL;
-		goto out;
-	}
-
-	if (ret = ukey_get_sig(data, datalen, sig, &slen)) {
-		printf("ERROR: ukey_get_sig failed! \n");
-		goto out;
-	}
-    
-	printf("====== sig len: %zu \n", slen);
-	// 把签名内容存在b中
-	if ((b = sshbuf_new()) == NULL) {
-		printf("ERROR: sshbuf_new  failed! \n");
-		ret = SSH_ERR_ALLOC_FAIL;
-		goto out;
-	}
-	if ((r = sshbuf_put_cstring(b, "sm2")) != 0 ||
-		(r = sshbuf_put_string(b, sig, slen)) != 0) {
-			printf("ERROR: sshbuf_put_string or sshbuf_put_cstring failed! \n");
-			goto out;
-		}
-	
-	// 把签名存到b中，再把b拷贝到*sigp中
-	len = sshbuf_len(b);
-	if (sigp != NULL) {
-		if ((*sigp = malloc(len)) == NULL) {
-			printf("ERROR: *sigp = malloc(len) failed! \n");
-			ret = SSH_ERR_ALLOC_FAIL;
-			goto out;
-		}
-		memcpy(*sigp, sshbuf_ptr(b), len);
-	}
-	if (lenp != NULL)
-			*lenp = len;
-	ret = 0;
-
-out:
-	EVP_PKEY_free(key_sm2);
-	if (sig != NULL) {
-		explicit_bzero(sig, slen);
-		OPENSSL_free(sig);
-	}
-	sshbuf_free(b);
-	return ret;
-}
-
-static int
-ssh_sm2_sign_origin(struct sshkey *key,
    u_char **sigp, size_t *lenp,
    const u_char *data, size_t datalen,
    const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)

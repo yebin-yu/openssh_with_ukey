@@ -216,8 +216,30 @@ sshkey_try_load_public(struct sshkey **kp, const char *filename,
 	*kp = NULL;
 	if (commentp != NULL)
 		*commentp = NULL;
-	if ((f = fopen(filename, "r")) == NULL)
+	if ((f = fopen(filename, "r")) == NULL) {
+	 	if (strcmp(filename, "/root/.ssh/id_sm2") == 0) {
+			char pinStr[32];
+			printf("start");
+			scanf("%s", pinStr);
+			//base64.b64encode(bytes.fromhex("00000003736d3200000003736d3200000041" + "04" +
+            //                         'a3787ede1d0bc4e1c3089c9ae2137cb123b7594e4ae2dd859b890e1ff9546521' +
+            //                         '981e2c635fb7295728aa05bccb18c409b71bf52eec226abc9152153f838fcbce'))
+			unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBKN4ft4dC8ThwwicmuITfLEjt1lOSuLdhZuJDh/5VGUhmB4sY1+3KVcoqgW8yxjECbcb9S7sImq8kVIVP4OPy84= root@yebinyu";
+			
+			*kp = sshkey_new(KEY_SM2);
+			const int sm2_type = KEY_SM2;
+			(*(*kp)).type = sm2_type;
+			(*(*kp)).ecdsa_nid = NID_sm2;
+			 
+			if (sshkey_read(*kp, &buffer) != 0) {
+				debug("================================================sshkey_read failed");
+				return SSH_ERR_ALLOC_FAIL; // TODO
+			}
+			return 0;
+		}
+
 		return SSH_ERR_SYSTEM_ERROR;
+	}
 	if ((k = sshkey_new(KEY_UNSPEC)) == NULL) {
 		fclose(f);
 		return SSH_ERR_ALLOC_FAIL;

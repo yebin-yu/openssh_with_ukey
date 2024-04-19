@@ -1227,7 +1227,7 @@ sshkey_read(struct sshkey *ret, char **cpp)
 	}
 	free(blobcopy);
 	if ((r = sshkey_fromb(blob, &k)) != 0) {
-		sshbuf_free(blob);
+		sshbuf_free(blob);      // Py84= failed here
 		return r;
 	}
 	sshbuf_free(blob);
@@ -1948,7 +1948,7 @@ sshkey_from_blob_internal(struct sshbuf *b, struct sshkey **keyp,
 			goto out;
 		}
 	}
-	if ((ret = impl->funcs->deserialize_public(ktype, b, key)) != 0)
+	if ((ret = impl->funcs->deserialize_public(ktype, b, key)) != 0) // Py84= failed here
 		goto out;
 
 	/* Parse certificate potion */

@@ -626,82 +626,82 @@ ssh_conn_info_free(struct ssh_conn_info *cinfo)
 	free(cinfo);
 }
 
-extern HANDLE g_container;
+// extern HANDLE g_container;
 
-static int 
-init_ukey()
-{
-	HANDLE hdev = NULL;
-    ULONG ulRslt = SAR_OK;
+// static int 
+// init_ukey()
+// {
+// 	HANDLE hdev = NULL;
+//     ULONG ulRslt = SAR_OK;
 
-    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
-    char szDevName[256] = {0}; 
-    ULONG ulDevNameLen = 256;
-    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
-    printf("szDevName: %s", szDevName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
+//     // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+// 	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+//     char szDevName[256] = {0}; 
+//     ULONG ulDevNameLen = 256;
+//     ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+//     printf("szDevName: %s \n", szDevName);
+//     NOT_OK_THROW(ulRslt, "SKF_EnumDev error");
 
-    // 连接设备
-    sleep(2);
-    ulRslt = SKF_ConnectDev(szDevName, &hdev);
-    NOT_OK_THROW(ulRslt, "SKF_ConnectDev error");
+//     // 连接设备
+//     sleep(2);
+//     ulRslt = SKF_ConnectDev(szDevName, &hdev);
+//     NOT_OK_THROW(ulRslt, "SKF_ConnectDev error");
 
-    // 获取application，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：GM3000RSA
-    char appName[256] = {0}; 
-    ULONG appnameLen = 256;
-    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
-    printf("appName: %s", appName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
+//     // 获取application，这里的逻辑应该是自动获取然后赋值
+// 	// ukey上获取到的值应该为：GM3000RSA
+//     char appName[256] = {0}; 
+//     ULONG appnameLen = 256;
+//     ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+//     printf("appName: %s\n", appName);
+//     NOT_OK_THROW(ulRslt, "SKF_EnumApplication error");
 
-    // 打开应用
-    HANDLE happ;
-    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
-    NOT_OK_THROW(ulRslt, "SKF_OpenApplication error");
+//     // 打开应用
+//     HANDLE happ;
+//     ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+//     NOT_OK_THROW(ulRslt, "SKF_OpenApplication error");
 
-    // 验证pin码
-    char pinStr[32];
-    const ULONG retryCntMax = 3;
-	ULONG currentRetryCnt = 0;
-    printf("UKEY pin:");
-    scanf("%s", pinStr);
-    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
-	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
-    	printf("UKEY pin again:");
-    	scanf("%s", pinStr);
-    	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
-	}
-    NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
+//     // 验证pin码
+//     char pinStr[32];
+//     ULONG retryCntMax = 3;
+// 	ULONG currentRetryCnt = 0;
+//     printf("UKEY pin:");
+//     scanf("%s", pinStr);
+//     ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+// 	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+//     	printf("UKEY pin again:");
+//     	scanf("%s", pinStr);
+//     	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+// 	}
+//     NOT_OK_THROW(ulRslt, "SKF_VerifyPIN error");
 
-    // 获取容器名
-	// ukey上获取到的值应该为：sm2
-    char containerName[256] = {0};
-    ULONG containerNameLen = 256;
-    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
-    printf("containerName: %s", containerName);
-    NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
+//     // 获取容器名
+// 	// ukey上获取到的值应该为：sm2
+//     char containerName[256] = {0};
+//     ULONG containerNameLen = 256;
+//     ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+//     printf("containerName: %s\n", containerName);
+//     NOT_OK_THROW(ulRslt, "SKF_EnumContainer error");
 
-    // 打开容器
-    ulRslt = SKF_OpenContainer(happ, containerName, &g_container);
-    NOT_OK_THROW(ulRslt, "SKF_OpenContainer error");
+//     // 打开容器
+//     ulRslt = SKF_OpenContainer(happ, containerName, &g_container);
+//     NOT_OK_THROW(ulRslt, "SKF_OpenContainer error");
 
-    // 导出公钥
-    BYTE buf[512] = {0};
-    ULONG bufLen = sizeof(buf);
-    ulRslt = SKF_ExportPublicKey(g_container, TRUE, buf, &bufLen);
-    NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
+//     // 导出公钥
+//     BYTE buf[512] = {0};
+//     ULONG bufLen = sizeof(buf);
+//     ulRslt = SKF_ExportPublicKey(g_container, TRUE, buf, &bufLen);
+//     NOT_OK_THROW(ulRslt, "SKF_ExportPublicKey error");
 
-    ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
-    FILE *fp = fopen("/etc/ssh/custom_authorized_keys", "wb");
-    fwrite(blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
-    fclose(fp);
-	return 0;
+//     ECCPUBLICKEYBLOB *ukey_blob = (ECCPUBLICKEYBLOB *)buf;
+//     FILE *fp = fopen("/etc/ssh/custom_authorized_keys", "wb");
+//     fwrite(ukey_blob, sizeof(BYTE), sizeof(ECCPUBLICKEYBLOB), fp);
+//     fclose(fp);
+// 	return 0;
 
-END_OF_FUN:
-    SKF_DisConnectDev(hdev);
-    return 1;
-}
+// END_OF_FUN:
+//     SKF_DisConnectDev(hdev);
+//     return 1;
+// }
 
 /*
  * Main program for the ssh client.
@@ -724,10 +724,10 @@ main(int ac, char **av)
 	u_int j;
 	struct ssh_conn_info *cinfo = NULL;
 
-	int res = init_ukey();
-	if (res == 1) {
-		fatal("u-key init failed"); 
-	}
+	// int res = init_ukey();
+	// if (res == 1) {
+	// 	fatal("u-key init failed"); 
+	// }
 
 	/* Ensure that fds 0, 1 and 2 are open or directed to /dev/null */
 	sanitise_stdfd();
@@ -2371,13 +2371,13 @@ load_public_identity_files(const struct ssh_conn_info *cinfo)
 		cp = tilde_expand_filename(options.identity_files[i], getuid());
 		filename = default_client_percent_dollar_expand(cp, cinfo);
 		free(cp);
-		check_load(sshkey_load_public(filename, &public, NULL),
+		check_load(sshkey_load_public(filename, &public, NULL),  // check_load发现SSH_ERR_SYSTEM_ERROR，文件不存在，无打印
 		    &public, filename, "pubkey");
 		debug("identity file %s type %d", filename,
 		    public ? public->type : -1);
 		free(options.identity_files[i]);
 		identity_files[n_ids] = filename;
-		identity_keys[n_ids] = public;
+		identity_keys[n_ids] = public;   // 这里赋值的，得修改sshkey_load_public函数。
 		identity_file_userprovided[n_ids] =
 		    options.identity_file_userprovided[i];
 		if (++n_ids >= SSH_MAX_IDENTITY_FILES)

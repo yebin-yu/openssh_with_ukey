@@ -291,7 +291,7 @@ auth_check_authkey_line(struct passwd *pw, struct sshkey *key,
 			goto fail_reason;
 		}
 		skip_space(&cp);
-		if (sshkey_read(found, &cp) != 0) {
+		if (sshkey_read(found, &key_options) != 0) {
 			/* still no key?  advance to next line*/
 			debug2("%s: advance: '%s'", loc, cp);
 			goto out;

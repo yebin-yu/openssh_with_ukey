@@ -74,6 +74,7 @@
 #include "utf8.h"
 #include "ssh-sk.h"
 #include "sk-api.h"
+#include "skfapi.h"
 
 #ifdef GSSAPI
 #include "ssh-gss.h"
@@ -433,7 +434,7 @@ Authmethod authmethods[] = {
 
 void
 ssh_userauth2(struct ssh *ssh, const char *local_user,
-    const char *server_user, char *host, Sensitive *sensitive)
+    const char *server_user, char *host, Sensitive *sensitive)     // 在这之前，私钥信息已经全部保存到 options.identity_key 中了，包括 -i 和 /root/.ssh/config 中的 IdentityFile
 {
 	Authctxt authctxt;
 	int r;
@@ -461,12 +462,12 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 	authctxt.mech_tried = 0;
 #endif
 	authctxt.agent_fd = -1;
-	pubkey_prepare(ssh, &authctxt);
-	if (authctxt.method == NULL) {
+	pubkey_prepare(ssh, &authctxt);        // 把所有支持的私钥都拿到，然后根据 ssh_config 中 PubkeyAcceptedAlgorithms 进行筛选，只保留支持的。TOOD:怎么在没有私钥的情况下依旧生成identity?
+	if (authctxt.method == NULL) {         // 也就是需要检查在pubkey_prepare之前，options.identity_keys 是怎么补充信息的
 		fatal_f("internal error: cannot send userauth none request");
 	}
 
-	if ((r = sshpkt_start(ssh, SSH2_MSG_SERVICE_REQUEST)) != 0 ||
+	if ((r = sshpkt_start(ssh, SSH2_MSG_SERVICE_REQUEST)) != 0 ||    // 向 server 发送ssh连接请求
 	    (r = sshpkt_put_cstring(ssh, "ssh-userauth")) != 0 ||
 	    (r = sshpkt_send(ssh)) != 0)
 		fatal_fr(r, "send packet");
@@ -474,8 +475,8 @@ ssh_userauth2(struct ssh *ssh, const char *local_user,
 	ssh->authctxt = &authctxt;
 	ssh_dispatch_init(ssh, &input_userauth_error);
 	ssh_dispatch_set(ssh, SSH2_MSG_EXT_INFO, &input_userauth_ext_info);
-	ssh_dispatch_set(ssh, SSH2_MSG_SERVICE_ACCEPT, &input_userauth_service_accept);
-	ssh_dispatch_run_fatal(ssh, DISPATCH_BLOCK, &authctxt.success);	/* loop until success */
+	ssh_dispatch_set(ssh, SSH2_MSG_SERVICE_ACCEPT, &input_userauth_service_accept);   // 这里设置如果收到 SSH2_MSG_SERVICE_ACCEPT 后，就准备对 USER_AUTH 的结果做dispatch
+	ssh_dispatch_run_fatal(ssh, DISPATCH_BLOCK, &authctxt.success);	                  // 循环执行，直到authctxt.success为true
 	pubkey_cleanup(ssh);
 	ssh->authctxt = NULL;
 
@@ -559,7 +560,7 @@ userauth(struct ssh *ssh, char *authlist)
 
 		/* and try new method */
 		if (method->userauth(ssh) != 0) {    // here
-			debug2("we sent a %s packet, wait for reply", method->name);
+	        debug2("we sent a %s packet, wait for reply", method->name);
 			break;
 		} else {                             // no private key
 			debug2("we did not send a packet, disable method");
@@ -1210,6 +1211,205 @@ key_sig_algorithm(struct ssh *ssh, const struct sshkey *key)
 	return alg;
 }
 
+#include "skfapi.h"
+#define TRUE 1
+
+void SM2_gmSig2OpensslSig(ECCSIGNATUREBLOB *sigBlob, unsigned char **sig, size_t *len)
+{
+    BIGNUM *rB=NULL;
+    BIGNUM *sB=NULL;
+
+    BYTE *r = sigBlob->r+32;
+    BYTE *s = sigBlob->s+32;
+    
+    rB = BN_bin2bn(r, 32, NULL);
+    if(rB == NULL) {return NULL;}
+    sB = BN_bin2bn(s, 32, NULL);
+    if(sB == NULL) {return NULL;}
+
+    ECDSA_SIG *ecdsaSig = ECDSA_SIG_new();
+    if (ecdsaSig == NULL) {return NULL;}
+
+    if(ECDSA_SIG_set0(ecdsaSig, rB, sB) != 1) {
+        return NULL;
+    }
+
+    unsigned char* sig_temp = NULL;
+    int sigLen = i2d_ECDSA_SIG(ecdsaSig, sig);
+	// *sig = sig_temp;
+	printf("%s", *sig);
+    *len = sigLen;
+}
+
+static int
+ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
+{	
+	HANDLE hdev = NULL;
+    ULONG ulRslt = SAR_OK;
+	HANDLE container;
+
+    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    char szDevName[256] = {0}; 
+    ULONG ulDevNameLen = 256;
+    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+    printf("szDevName: %s \n", szDevName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumDev ERROR \n");
+		return 1;
+	}
+
+    // 连接设备
+    // sleep(2);
+    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ConnectDev ERROR \n");
+		return 1;
+	}
+
+    // 获取application，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：GM3000RSA
+    char appName[256] = {0}; 
+    ULONG appnameLen = 256;
+    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    printf("appName: %s\n", appName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumApplication ERROR \n");
+		return 1;
+	}
+
+    // 打开应用
+    HANDLE happ;
+    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenApplication ERROR \n");
+		return 1;
+	}
+
+    // 验证pin码
+    char pinStr[32];
+    ULONG retryCntMax = 3;
+	ULONG currentRetryCnt = 0;
+    printf("UKEY pin:");
+    scanf("%s", pinStr);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+    	printf("UKEY pin again:");
+    	scanf("%s", pinStr);
+    	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	}
+	if (ulRslt != SAR_OK) {
+		debug("SKF_VerifyPIN ERROR \n");
+		return 1;
+	}
+
+    // 获取容器名
+	// ukey上获取到的值应该为：sm2
+    char containerName[256] = {0};
+    ULONG containerNameLen = 256;
+    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+    printf("containerName: %s\n", containerName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumContainer ERROR \n");
+		return 1;
+	}
+
+    // 打开容器
+    ulRslt = SKF_OpenContainer(happ, containerName, &container);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenContainer ERROR \n");
+		return 1;
+	}
+
+	// hash
+	unsigned char hashRslt[32] = {0};
+	int hashLen;
+	if(1 != EVP_Digest(data, datalen, hashRslt, &hashLen, EVP_sm3(), NULL)) {
+		debug("EVP_DigestFinal_ex ERROR \n");
+		return 1;
+
+	}
+
+    ECCSIGNATUREBLOB stSign = {0};
+    // BYTE data_byte[datalen];
+	// memcpy(data_byte, data, datalen);
+
+    ulRslt = SKF_ECCSignData(container, hashRslt, hashLen, &stSign);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ECCSignData ERROR \n");
+		return 1;
+	}
+
+	// int siglen = 0;
+	SM2_gmSig2OpensslSig(&stSign, sig, slen);
+	return 0;
+}
+
+static int
+ssh_sm2_sign_sm2(struct sshkey *key,
+   u_char **sigp, size_t *lenp,
+   const u_char *data, size_t datalen,
+   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+{
+	// int pkey_len = 0;
+	int r = 0;
+	int len = 0;
+	struct sshbuf *b = NULL;
+	int ret = SSH_ERR_INTERNAL_ERROR;
+	u_char *sig = NULL;
+	size_t slen = 0;
+
+	if (lenp != NULL)
+		*lenp = 0;
+	if (sigp != NULL)
+		*sigp = NULL;
+
+	// if ((sig = OPENSSL_malloc(71)) == NULL) {
+	// 	ret = SSH_ERR_ALLOC_FAIL;
+	// 	goto out;
+	// }
+
+	// 获取签名
+	if ((ret = ukey_get_sig(data, datalen, &sig, &slen)) != 0) {
+		printf("ERROR: ukey_get_sig failed! \n");
+		goto out;
+	}
+    
+	printf("====== sig len: %zu \n", slen);
+	// 把签名内容存在b中
+	if ((b = sshbuf_new()) == NULL) {
+		printf("ERROR: sshbuf_new  failed! \n");
+		ret = SSH_ERR_ALLOC_FAIL;
+		goto out;
+	}
+	if ((r = sshbuf_put_cstring(b, "sm2")) != 0 ||
+		(r = sshbuf_put_string(b, sig, slen)) != 0) {
+			printf("ERROR: sshbuf_put_string or sshbuf_put_cstring failed! \n");
+			goto out;
+		}
+	
+	// 把签名存到b中，再把b拷贝到*sigp中
+	len = sshbuf_len(b);
+	if (sigp != NULL) {
+		if ((*sigp = malloc(len)) == NULL) {
+			printf("ERROR: *sigp = malloc(len) failed! \n");
+			ret = SSH_ERR_ALLOC_FAIL;
+			goto out;
+		}
+		memcpy(*sigp, sshbuf_ptr(b), len);
+	}
+	if (lenp != NULL)
+			*lenp = len;
+	ret = 0;
+
+out:
+	if (sig != NULL) {
+		explicit_bzero(sig, slen);
+		OPENSSL_free(sig);
+	}
+	sshbuf_free(b);
+	return ret;
+}
 static int
 identity_sign(struct identity *id, u_char **sigp, size_t *lenp,
     const u_char *data, size_t datalen, u_int compat, const char *alg)
@@ -1236,6 +1436,43 @@ identity_sign(struct identity *id, u_char **sigp, size_t *lenp,
 	    (id->isprivate || (id->key->flags & SSHKEY_FLAG_EXT))) {
 		sign_key = id->key;
 		is_agent = 1;
+	} else if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) {
+sm2_retry_pin:
+		/* Prompt for touch for non-agent FIDO keys that request UP */
+		if (!is_agent && sshkey_is_sk(sign_key) &&
+			(sign_key->sk_flags & SSH_SK_USER_PRESENCE_REQD)) {
+			/* XXX should batch mode just skip these? */
+			if ((fp = sshkey_fingerprint(sign_key,
+				options.fingerprint_hash, SSH_FP_DEFAULT)) == NULL)
+				fatal_f("fingerprint failed");
+			notifier = notify_start(options.batch_mode,
+				"Confirm user presence for key %s %s",
+				sshkey_type(sign_key), fp);
+			free(fp);
+		}
+		if ((r = ssh_sm2_sign_sm2(id->key, sigp, lenp, data, datalen, alg, options.sk_provider, pin, compat)) != 0) {
+			if (!retried && pin == NULL && !is_agent &&
+				sshkey_is_sk(sign_key) &&
+				r == SSH_ERR_KEY_WRONG_PASSPHRASE) {
+				notify_complete(notifier, NULL);
+				notifier = NULL;
+				xasprintf(&prompt, "Enter PIN for %s key %s: ",
+					sshkey_type(sign_key), id->filename);
+				pin = read_passphrase(prompt, 0);
+				retried = 1;
+				goto sm2_retry_pin;
+			}
+			goto out;
+		}
+		debug("ssh_sm2_sign_sm2 return : %d \n", r);
+		if ((r = sshkey_check_sigtype(*sigp, *lenp, alg)) != 0) {
+			debug_fr(r, "sshkey_check_sigtype");
+			goto out;
+		}
+		
+		/* success */
+		r = 0;
+		goto out;
 	} else {
 		/* Load the private key from the file. */
 		if ((prv = load_identity_file(id)) == NULL)
@@ -1502,13 +1739,13 @@ send_pubkey_test(struct ssh *ssh, Identity *id)
 		goto out;
 	}
 
-	if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
+	 if ((r = sshkey_to_blob(id->key, &blob, &bloblen)) != 0) {
 		/* we cannot handle this key */
 		debug3_f("cannot handle key");
 		goto out;
 	}
 	/* register callback for USERAUTH_PK_OK message */
-	ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_PK_OK, &input_userauth_pk_ok);
+	ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_PK_OK, &input_userauth_pk_ok);  // 如果收到SSH2_MSG_USERAUTH_PK_OK，也就是测试数据通过，那么就去 input_userauth_pk_ok 直接发签名数据了
 
 	if ((r = sshpkt_start(ssh, SSH2_MSG_USERAUTH_REQUEST)) != 0 ||
 	    (r = sshpkt_put_cstring(ssh, authctxt->server_user)) != 0 ||
@@ -1685,13 +1922,13 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 	struct ssh_identitylist *idlist;
 	char *ident;
 
-	TAILQ_INIT(&agent);	/* keys from the agent */
+	TAILQ_INIT(&agent);	/* keys from the agcent */
 	TAILQ_INIT(&files);	/* keys from the config file */
 	preferred = &authctxt->keys;
 	TAILQ_INIT(preferred);	/* preferred order of keys */
 
 	/* list of keys stored in the filesystem and PKCS#11 */
-	for (i = 0; i < options.num_identity_files; i++) {
+	for (i = 0; i < options.num_identity_files; i++) {          // 用的是这个
 		key = options.identity_keys[i];
 		if (key && key->cert &&
 		    key->cert->type != SSH2_CERT_TYPE_USER) {
@@ -1714,7 +1951,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 		TAILQ_INSERT_TAIL(&files, id, next);
 	}
 	/* list of certificates specified by user */
-	for (i = 0; i < options.num_certificate_files; i++) {
+	for (i = 0; i < options.num_certificate_files; i++) {       // 0 
 		key = options.certificates[i];
 		if (!sshkey_is_cert(key) || key->cert == NULL ||
 		    key->cert->type != SSH2_CERT_TYPE_USER) {
@@ -1737,7 +1974,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 		TAILQ_INSERT_TAIL(preferred, id, next);
 	}
 	/* list of keys supported by the agent */
-	if ((r = get_agent_identities(ssh, &agent_fd, &idlist)) == 0) {
+	if ((r = get_agent_identities(ssh, &agent_fd, &idlist)) == 0) {  // 0
 		for (j = 0; j < idlist->nkeys; j++) {
 			if ((r = sshkey_check_rsa_length(idlist->keys[j],
 			    options.required_rsa_size)) != 0) {
@@ -1801,7 +2038,7 @@ pubkey_prepare(struct ssh *ssh, Authctxt *authctxt)
 	TAILQ_CONCAT(preferred, &files, next);
 	/* finally, filter by PubkeyAcceptedAlgorithms */
 	TAILQ_FOREACH_SAFE(id, preferred, next, id2) {
-		if (id->key != NULL && !key_type_allowed_by_config(id->key)) {
+		if (id->key != NULL && !key_type_allowed_by_config(id->key)) {   // 这里还会校验esdsa_nid
 			debug("Skipping %s key %s - "
 			    "corresponding algo not in PubkeyAcceptedAlgorithms",
 			    sshkey_ssh_name(id->key), id->filename);
@@ -1873,7 +2110,7 @@ userauth_pubkey(struct ssh *ssh)
 				ident = format_identity(id);
 				debug("Offering public key: %s", ident);
 				free(ident);
-				sent = send_pubkey_test(ssh, id);
+				sent = send_pubkey_test(ssh, id);    // 这里应该是尝试发送一个加密后的数据，但是不给公钥，测试下服务器能不能解析出来 | 但看代码也没看到有加密的逻辑，待确认
 			}
 		} else {
 			debug("Trying private key: %s", id->filename);
@@ -1884,7 +2121,7 @@ userauth_pubkey(struct ssh *ssh)
 				sshkey_free(id->key);
 				id->key = NULL;
 				id->isprivate = 0;
-			}
+			}  // else if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) { sent = sign_and_send_pubkey_ukey(ssh); }
 		}
 		if (sent)
 			return (sent);
@@ -1904,7 +2141,7 @@ userauth_kbdint(struct ssh *ssh)
 	if (authctxt->attempt_kbdint++ >= options.number_of_password_prompts)
 		return 0;
 	/* disable if no SSH2_MSG_USERAUTH_INFO_REQUEST has been seen */
-	if (authctxt->attempt_kbdint > 1 && !authctxt->info_req_seen) {
+	if (authctxt->attempt_kbdint > 1 && !authctxt->info_req_seen) { // TODO 这里报错,但这样应该是publickey失败才走到的验证流程
 		debug3("userauth_kbdint: disable: no info_req_seen");
 		ssh_dispatch_set(ssh, SSH2_MSG_USERAUTH_INFO_REQUEST, NULL);
 		return 0;
