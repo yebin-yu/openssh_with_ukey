@@ -121,8 +121,6 @@ extern char *__progname;
 static char **saved_av;
 #endif
 
-#define TRUE 1
-
 /* Flag indicating whether debug mode is on.  May be set on the command line. */
 int debug_flag = 0;
 

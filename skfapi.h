@@ -4,6 +4,8 @@
 
 #pragma pack(1)
 
+#define TRUE 1
+
 #define SAR_OK							0x00000000	//�ɹ�
 #define SAR_FAIL						0x0A000001	//ʧ��
 #define SAR_UNKNOWNERR					0x0A000002	//�쳣����

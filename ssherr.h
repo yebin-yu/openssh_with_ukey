@@ -82,6 +82,8 @@
 #define SSH_ERR_SIGN_ALG_UNSUPPORTED		-58
 #define SSH_ERR_FEATURE_UNSUPPORTED		-59
 #define SSH_ERR_DEVICE_NOT_FOUND		-60
+#define SSH_ERR_SSHKEY_READ_FAILED      -61
+#define SSH_ERR_UKEY_ERROR              -62
 
 /* Translate a numeric error code to a human-readable error string */
 const char *ssh_err(int n);
