@@ -48,6 +48,7 @@
 #include "sshbuf.h"
 #include "ssherr.h"
 #include "krl.h"
+#include "skfapi.h"
 
 #define MAX_KEY_FILE_SIZE	(1024 * 1024)
 
@@ -201,6 +202,204 @@ sshkey_load_pubkey_from_private(const char *filename, struct sshkey **pubkeyp)
 	return r;
 }
 
+HCONTAINER hcontainer = NULL;
+DEVHANDLE hdev = NULL;
+ECCPUBLICKEYBLOB *blob = NULL;
+
+static int
+init_ukey_container_and_dev()
+{
+    ULONG ulRslt = SAR_OK;
+
+    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    char szDevName[256] = {0}; 
+    ULONG ulDevNameLen = 256;
+    ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
+    printf("szDevName: %s \n", szDevName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumDev ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 连接设备
+    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ConnectDev ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 获取application，这里的逻辑应该是自动获取然后赋值
+	// ukey上获取到的值应该为：GM3000RSA
+    char appName[256] = {0}; 
+    ULONG appnameLen = 256;
+    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    printf("appName: %s\n", appName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumApplication ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 打开应用
+    HANDLE happ;
+    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenApplication ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 验证pin码
+    char pinStr[32];
+    ULONG retryCntMax = 3;
+	ULONG currentRetryCnt = 0;
+    printf("UKEY pin:");
+    scanf("%s", pinStr);
+    ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+		sleep(2);  // 防止暴力破解，等待两秒
+    	printf("UKEY pin again:");
+    	scanf("%s", pinStr);
+    	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
+	}
+	if (ulRslt != SAR_OK) {
+		debug("SKF_VerifyPIN ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 获取容器名
+	// ukey上获取到的值应该为：sm2
+    char containerName[256] = {0};
+    ULONG containerNameLen = 256;
+    ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
+    printf("containerName: %s\n", containerName);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_EnumContainer ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+    // 打开容器
+    ulRslt = SKF_OpenContainer(happ, containerName, &hcontainer);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_OpenContainer ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+
+	BYTE buf[sizeof(ECCPUBLICKEYBLOB)] = {0};
+    ULONG bufLen = sizeof(buf);
+    ulRslt = SKF_ExportPublicKey(hcontainer, TRUE, buf, &bufLen);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ExportPublicKey ERROR \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+	
+	blob = malloc(sizeof(ECCPUBLICKEYBLOB));
+	if (blob == NULL) {
+		debug("malloc blob failed \n");
+		return SSH_ERR_UKEY_ERROR;
+	}
+	memcpy(blob, buf, sizeof(ECCPUBLICKEYBLOB));
+	return SAR_OK;
+}
+
+static void hexToByte(char* str, int len, BYTE* result) {
+    if (len % 2 != 0) {
+        return;
+    }
+
+    for (int i = 0; i < len; i += 2) {
+        char subStr[3] = {str[i], str[i + 1], '\0'};
+        result[i / 2] = (unsigned char)strtol(subStr, NULL, 16);
+    }
+}
+
+static int 
+saveAndGetSm2Pub(ECCPUBLICKEYBLOB *blob)
+{
+	// blob转公钥字符串
+	BYTE *x = blob->XCoordinate + 32;
+    BYTE *y = blob->YCoordinate + 32;
+
+	const int headLen = 19;
+	const int xLen = 32;
+	const int yLen = 32;
+
+	BYTE *head_char = malloc(headLen);
+	// 00000003736d3200000003736d3200000041是固定头，04表示未压缩
+	hexToByte("00000003736d3200000003736d320000004104", 38, head_char);
+	BYTE *allBytes = NULL;
+	if ((allBytes = malloc(headLen + 32 + 32)) == NULL) {
+		debug("allBytes malloc ERROR \n");
+		return 1;
+	}
+
+	memcpy(allBytes, head_char, headLen);
+	memcpy(allBytes + headLen, x, xLen);
+	memcpy(allBytes + headLen + xLen, y, yLen);
+	size_t pubLen = ((headLen + xLen + yLen + 2) / 3) * 4 + 1;
+	char *pubStr = malloc(pubLen);
+	if (b64_ntop(allBytes, headLen + xLen + yLen, pubStr, pubLen) == -1) {
+		debug("b64_ntop ERcROR \n");
+		return 1;
+	}
+
+	FILE *fp = fopen("sm2.pub", "wb");
+	fwrite("sm2 ", sizeof(char), 4, fp);
+    fwrite(pubStr, sizeof(char), pubLen - 1, fp);
+	fwrite(" root@yebinyu", sizeof(char), 13, fp);
+    fclose(fp);
+
+	free(allBytes);
+	free(pubStr);
+	return SAR_OK;
+}
+
+static int
+ukey_to_sshkey(struct sshkey *kp)
+{
+	// 初始化container，dev，还有ukey公钥blob
+	if (init_ukey_container_and_dev() != SAR_OK) {
+		printf("init_ukey_container_and_dev failed\n");
+		return 1;
+	}
+
+	if (saveAndGetSm2Pub(blob) != SAR_OK) {
+		printf("saveAndGetSm2Pub Failed\n");
+		return 1;
+	}
+
+	// 从sm2.pub中读取公钥信息
+	FILE *fp = fopen("sm2.pub", "r");
+	if (fp == NULL) {
+		printf("Error opening file: sm2.pub\n");
+		return 1;
+	}
+
+	char *buffer = NULL;
+	size_t buffer_size = 0;
+	char c;
+	while ((c = fgetc(fp)) != EOF) {
+		buffer_size++;
+		buffer = realloc(buffer, buffer_size);
+		if (buffer == NULL) {
+			printf("Error allocating memory\n");
+			fclose(fp);
+			return 1;
+		}
+		buffer[buffer_size - 1] = c;
+	}
+
+	buffer[buffer_size] = '\0';
+	printf("File contents:\n%s\n", buffer);
+	fclose(fp);
+	
+	if (sshkey_read(kp, &buffer) != 0) {
+		debug("sshkey_read failed");
+		return SSH_ERR_SSHKEY_READ_FAILED;
+	}
+
+	return 0;
+}
+
 static int
 sshkey_try_load_public(struct sshkey **kp, const char *filename,
     char **commentp)
@@ -218,23 +417,15 @@ sshkey_try_load_public(struct sshkey **kp, const char *filename,
 		*commentp = NULL;
 	if ((f = fopen(filename, "r")) == NULL) {
 	 	if (strcmp(filename, "/root/.ssh/id_sm2") == 0) {
-			char pinStr[32];
-			printf("start");
-			scanf("%s", pinStr);
-			//base64.b64encode(bytes.fromhex("00000003736d3200000003736d3200000041" + "04" +
-            //                         'a3787ede1d0bc4e1c3089c9ae2137cb123b7594e4ae2dd859b890e1ff9546521' +
-            //                         '981e2c635fb7295728aa05bccb18c409b71bf52eec226abc9152153f838fcbce'))
-			unsigned char *buffer = "sm2 AAAAA3NtMgAAAANzbTIAAABBBKN4ft4dC8ThwwicmuITfLEjt1lOSuLdhZuJDh/5VGUhmB4sY1+3KVcoqgW8yxjECbcb9S7sImq8kVIVP4OPy84= root@yebinyu";
-			
+			// 初始化kp
 			*kp = sshkey_new(KEY_SM2);
-			const int sm2_type = KEY_SM2;
-			(*(*kp)).type = sm2_type;
+			(*(*kp)).type = KEY_SM2;
 			(*(*kp)).ecdsa_nid = NID_sm2;
-			 
-			if (sshkey_read(*kp, &buffer) != 0) {
-				debug("================================================sshkey_read failed");
-				return SSH_ERR_ALLOC_FAIL; // TODO
+
+			if (ukey_to_sshkey(*kp) != 0) {
+				return 1;
 			}
+			
 			return 0;
 		}
 
