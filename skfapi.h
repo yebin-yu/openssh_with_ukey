@@ -1036,15 +1036,6 @@ ULONG DEVAPI SKF_CloseHandle(HANDLE hHandle);
 */
 ULONG DEVAPI SKF_SetSymmKey (DEVHANDLE hDev,  BYTE* pbKey, ULONG ulAlgID, HANDLE* phKey);
 
-
-#define NOT_OK_THROW(item, result) do { \
-    if(item != SAR_OK) { \
-        printf(result); \
-        goto END_OF_FUN; \
-    } \
-} while(0)
-
-
 #ifdef __cplusplus
 }
 #endif

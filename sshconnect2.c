@@ -1242,11 +1242,9 @@ void SM2_gmSig2OpensslSig(ECCSIGNATUREBLOB *sigBlob, unsigned char **sig, size_t
 }
 
 static int
-ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
-{	
-	HANDLE hdev = NULL;
+init_ukey_container(HCONTAINER *hcontainer, HANDLE *hdev)
+{
     ULONG ulRslt = SAR_OK;
-	HANDLE container;
 
     // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
 	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
@@ -1260,8 +1258,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
 	}
 
     // 连接设备
-    // sleep(2);
-    ulRslt = SKF_ConnectDev(szDevName, &hdev);
+    ulRslt = SKF_ConnectDev(szDevName, hdev);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_ConnectDev ERROR \n");
 		return 1;
@@ -1271,7 +1268,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
 	// ukey上获取到的值应该为：GM3000RSA
     char appName[256] = {0}; 
     ULONG appnameLen = 256;
-    ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
+    ulRslt = SKF_EnumApplication(*hdev, appName, &appnameLen);
     printf("appName: %s\n", appName);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_EnumApplication ERROR \n");
@@ -1280,7 +1277,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
 
     // 打开应用
     HANDLE happ;
-    ulRslt = SKF_OpenApplication(hdev, appName, &happ);
+    ulRslt = SKF_OpenApplication(*hdev, appName, &happ);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_OpenApplication ERROR \n");
 		return 1;
@@ -1294,6 +1291,7 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
     scanf("%s", pinStr);
     ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
 	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
+		sleep(2);  // 防止暴力破解，等待两秒
     	printf("UKEY pin again:");
     	scanf("%s", pinStr);
     	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
@@ -1315,43 +1313,166 @@ ukey_get_sig(const u_char *data, size_t datalen, u_char **sig, size_t *slen)
 	}
 
     // 打开容器
-    ulRslt = SKF_OpenContainer(happ, containerName, &container);
+    ulRslt = SKF_OpenContainer(happ, containerName, hcontainer);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_OpenContainer ERROR \n");
 		return 1;
 	}
 
-	// hash
-	unsigned char hashRslt[32] = {0};
-	int hashLen;
-	if(1 != EVP_Digest(data, datalen, hashRslt, &hashLen, EVP_sm3(), NULL)) {
-		debug("EVP_DigestFinal_ex ERROR \n");
-		return 1;
+	return SAR_OK;
+}
 
+static int
+ukey_get_sig(u_char *data, size_t datalen, u_char **sig, size_t *slen, struct sshkey *sign_key)
+{	
+	// get container handle
+    ULONG ulRslt = SAR_OK;
+	HCONTAINER container = NULL;
+	DEVHANDLE hDev = NULL;
+	if (init_ukey_container(&container, &hDev) != 0) {
+		debug("init_ukey_container ERROR \n");
+		return 1;
 	}
 
-    ECCSIGNATUREBLOB stSign = {0};
-    // BYTE data_byte[datalen];
-	// memcpy(data_byte, data, datalen);
+	BYTE buf[132] = {0};
+    ULONG bufLen = sizeof(buf);
+    ulRslt = SKF_ExportPublicKey(container, TRUE, buf, &bufLen);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_ExportPublicKey ERROR \n");
+		return 1;
+	}
 
+	// hash，和 sm2_compute_msg_hash 对比
+	unsigned char hashRslt[32] = {0};
+	int hashLen = 32;
+	// unsigned char *hashRslt = NULL;
+
+ 	ECCPUBLICKEYBLOB *blob = (ECCPUBLICKEYBLOB *)buf;
+	const unsigned char *sm2_id = (const unsigned char *)"1234567812345678";
+	HANDLE phHash = NULL;
+	ulRslt = SKF_DigestInit(hDev, SGD_SM3, blob, sm2_id, 16, &phHash);
+	if (ulRslt != SAR_OK) {
+		debug("ulRsltSKF_DigestInit:%d", ulRslt);
+	}
+	
+	ulRslt = SKF_Digest(phHash, data, datalen, hashRslt, &hashLen);
+	if (ulRslt != SAR_OK) {
+		debug("SKF_Digest:%d", ulRslt);
+	}
+
+	// ============== TEST - 12345678
+	// phHash = NULL;
+	// ulRslt = SKF_DigestInit(hDev, SGD_SM3, blob, sm2_id, 16, &phHash);
+	// if (ulRslt != SAR_OK) {
+	// 	debug("ulRsltSKF_DigestInit:%d", ulRslt);
+	// }
+	// ulRslt = SKF_Digest(phHash, "", 256, hashRslt, &hashLen);
+	// if (ulRslt != SAR_OK) {
+	// 	debug("SKF_Digest:%d", ulRslt);
+	// }
+
+	// ============== TEST - hash保存
+	debug("!!!!!!!!! hashLen:%zu", hashLen);
+	FILE *fp = fopen("byte_hash", "wb");
+    fwrite(hashRslt, sizeof(BYTE), hashLen, fp);
+    fclose(fp);
+
+	// sign
+    ECCSIGNATUREBLOB stSign = {0};
     ulRslt = SKF_ECCSignData(container, hashRslt, hashLen, &stSign);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_ECCSignData ERROR \n");
 		return 1;
 	}
 
-	// int siglen = 0;
+	// ============== TEST - stSign保存
+	debug("!!!!!!!!! sizeof(stSign):%zu", sizeof(stSign));
+	fp = fopen("byte_stSign", "wb");
+	BYTE *temp = (BYTE *)&stSign;
+    fwrite(temp, sizeof(BYTE), sizeof(stSign), fp);
+    fclose(fp);
+
 	SM2_gmSig2OpensslSig(&stSign, sig, slen);
+
+	// ============== TEST - sig保存
+	debug("!!!!!!!!! slen:%zu", *slen);
+	fp = fopen("byte_sig", "wb");
+    fwrite(sig, sizeof(BYTE), *slen, fp);
+    fclose(fp);
+
+	// ============== TEST - data保存
+	debug("!!!!!!!!! datalen:%zu", datalen);
+	fp = fopen("byte_data", "wb");
+    fwrite(data, sizeof(BYTE), datalen, fp);
+    fclose(fp);
+
 	return 0;
 }
+
+// {
+//     EVP_MD_CTX *hash = EVP_MD_CTX_new();
+//     const int md_size = EVP_MD_get_size(digest);
+//     uint8_t *z = NULL;
+//     BIGNUM *e = NULL;
+//     EVP_MD *fetched_digest = NULL;
+//     OSSL_LIB_CTX *libctx = ossl_ec_key_get_libctx(key);
+//     const char *propq = ossl_ec_key_get0_propq(key);
+
+//     if (md_size < 0) {
+// 		debug("md_size < 0");
+//         // ERR_raise(ERR_LIB_SM2, SM2_R_INVALID_DIGEST);
+//         goto done;
+//     }
+//     if (hash == NULL) {
+// 		debug("hash == NULL");
+//         // ERR_raise(ERR_LIB_SM2, ERR_R_EVP_LIB);
+//         goto done;
+//     }
+
+//     z = OPENSSL_zalloc(md_size);
+//     if (z == NULL)
+//         goto done;
+
+//     fetched_digest = EVP_MD_fetch(libctx, EVP_MD_get0_name(digest), propq);
+//     if (fetched_digest == NULL) {
+// 		debug("EVP_MD_fetch");
+//         // ERR_raise(ERR_LIB_SM2, ERR_R_INTERNAL_ERROR);
+//         goto done;
+//     }
+
+//     if (!ossl_sm2_compute_z_digest(z, fetched_digest, id, id_len, key)) {
+//         /* SM2err already called */
+//         goto done;
+//     }
+
+//     if (!EVP_DigestInit(hash, fetched_digest)
+//             || !EVP_DigestUpdate(hash, z, md_size)
+//             || !EVP_DigestUpdate(hash, msg, msg_len)
+//                /* reuse z buffer to hold H(Z || M) */
+//             || !EVP_DigestFinal(hash, z, NULL)) {
+//         // ERR_raise(ERR_LIB_SM2, ERR_R_EVP_LIB);
+//         goto done;
+//     }
+
+//     e = BN_bin2bn(z, md_size, NULL);
+//     if (e == NULL) {
+// 		debug("ERR_raise(ERR_LIB_SM2, ERR_R_INTERNAL_ERROR);");
+// 	}
+//         // ERR_raise(ERR_LIB_SM2, ERR_R_INTERNAL_ERROR);
+
+//  done:
+//     EVP_MD_free(fetched_digest);
+//     OPENSSL_free(z);
+//     EVP_MD_CTX_free(hash);
+//     return e;
+// }
 
 static int
 ssh_sm2_sign_sm2(struct sshkey *key,
    u_char **sigp, size_t *lenp,
    const u_char *data, size_t datalen,
-   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat)
+   const char *alg, const char *sk_provider, const char *sk_pin, u_int compat, struct sshkey *sign_key)
 {
-	// int pkey_len = 0;
 	int r = 0;
 	int len = 0;
 	struct sshbuf *b = NULL;
@@ -1364,16 +1485,20 @@ ssh_sm2_sign_sm2(struct sshkey *key,
 	if (sigp != NULL)
 		*sigp = NULL;
 
-	// if ((sig = OPENSSL_malloc(71)) == NULL) {
-	// 	ret = SSH_ERR_ALLOC_FAIL;
-	// 	goto out;
-	// }
-
 	// 获取签名
-	if ((ret = ukey_get_sig(data, datalen, &sig, &slen)) != 0) {
+	if ((ret = ukey_get_sig(data, datalen, &sig, &slen, sign_key)) != 0) {
 		printf("ERROR: ukey_get_sig failed! \n");
 		goto out;
 	}
+
+	// // ============== TEST - openssl hash
+	// const unsigned char *sm2_id = (const unsigned char *)"1234567812345678";
+	// BIGNUM2 *e = sm2_compute_msg_hash(EVP_sm3(), key->ecdsa,  sm2_id, 16, data, datalen);
+	// FILE *fp = fopen("byte_hash_openssl", "wb");
+    // fwrite(e->d, sizeof(BYTE), e->dmax, fp);
+    // fclose(fp);
+
+
     
 	printf("====== sig len: %zu \n", slen);
 	// 把签名内容存在b中
@@ -1438,6 +1563,7 @@ identity_sign(struct identity *id, u_char **sigp, size_t *lenp,
 		is_agent = 1;
 	} else if (strcmp(id->filename, "/root/.ssh/id_sm2") == 0) {
 sm2_retry_pin:
+		sign_key = id->key;
 		/* Prompt for touch for non-agent FIDO keys that request UP */
 		if (!is_agent && sshkey_is_sk(sign_key) &&
 			(sign_key->sk_flags & SSH_SK_USER_PRESENCE_REQD)) {
@@ -1450,7 +1576,7 @@ sm2_retry_pin:
 				sshkey_type(sign_key), fp);
 			free(fp);
 		}
-		if ((r = ssh_sm2_sign_sm2(id->key, sigp, lenp, data, datalen, alg, options.sk_provider, pin, compat)) != 0) {
+		if ((r = ssh_sm2_sign_sm2(sign_key, sigp, lenp, data, datalen, alg, options.sk_provider, pin, compat, sign_key)) != 0) {
 			if (!retried && pin == NULL && !is_agent &&
 				sshkey_is_sk(sign_key) &&
 				r == SSH_ERR_KEY_WRONG_PASSPHRASE) {
