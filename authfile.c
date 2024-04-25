@@ -211,8 +211,7 @@ init_ukey_container_and_dev()
 {
     ULONG ulRslt = SAR_OK;
 
-    // 枚举获取设备名，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：3DC2105010CFD4C62A42E5375DA38B9
+    // Get dev name and connect dev
     char szDevName[256] = {0}; 
     ULONG ulDevNameLen = 256;
     ulRslt = SKF_EnumDev(TRUE, szDevName, &ulDevNameLen);
@@ -222,15 +221,13 @@ init_ukey_container_and_dev()
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 连接设备
     ulRslt = SKF_ConnectDev(szDevName, &hdev);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_ConnectDev ERROR \n");
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 获取application，这里的逻辑应该是自动获取然后赋值
-	// ukey上获取到的值应该为：GM3000RSA
+    // Get application and connect application
     char appName[256] = {0}; 
     ULONG appnameLen = 256;
     ulRslt = SKF_EnumApplication(hdev, appName, &appnameLen);
@@ -240,7 +237,6 @@ init_ukey_container_and_dev()
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 打开应用
     HANDLE happ;
     ulRslt = SKF_OpenApplication(hdev, appName, &happ);
 	if (ulRslt != SAR_OK) {
@@ -248,7 +244,7 @@ init_ukey_container_and_dev()
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 验证pin码
+    // Check pin
     char pinStr[32];
     ULONG retryCntMax = 3;
 	ULONG currentRetryCnt = 0;
@@ -266,8 +262,7 @@ init_ukey_container_and_dev()
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 获取容器名
-	// ukey上获取到的值应该为：sm2
+    // Get container name and connect container
     char containerName[256] = {0};
     ULONG containerNameLen = 256;
     ulRslt = SKF_EnumContainer(happ, containerName, &containerNameLen);
@@ -277,7 +272,6 @@ init_ukey_container_and_dev()
 		return SSH_ERR_UKEY_ERROR;
 	}
 
-    // 打开容器
     ulRslt = SKF_OpenContainer(happ, containerName, &hcontainer);
 	if (ulRslt != SAR_OK) {
 		debug("SKF_OpenContainer ERROR \n");
@@ -315,7 +309,7 @@ static void hexToByte(char* str, int len, BYTE* result) {
 static int 
 saveAndGetSm2Pub(ECCPUBLICKEYBLOB *blob)
 {
-	// blob转公钥字符串
+	// blob to pubkey string
 	BYTE *x = blob->XCoordinate + 32;
     BYTE *y = blob->YCoordinate + 32;
 
@@ -324,7 +318,8 @@ saveAndGetSm2Pub(ECCPUBLICKEYBLOB *blob)
 	const int yLen = 32;
 
 	BYTE *head_char = malloc(headLen);
-	// 00000003736d3200000003736d3200000041是固定头，04表示未压缩
+	// 00000003736d3200000003736d3200000041: always
+	// 04: uncompressed
 	hexToByte("00000003736d3200000003736d320000004104", 38, head_char);
 	BYTE *allBytes = NULL;
 	if ((allBytes = malloc(headLen + 32 + 32)) == NULL) {
@@ -353,10 +348,81 @@ saveAndGetSm2Pub(ECCPUBLICKEYBLOB *blob)
 	return SAR_OK;
 }
 
+extern const struct sshkey_impl sshkey_sm2_impl;
+
+static void
+sshkey_free_contents(struct sshkey *k)
+{
+	const struct sshkey_impl *impl;
+
+	if (k == NULL)
+		return;
+	if ((impl = &sshkey_sm2_impl) != NULL &&
+	    impl->funcs->cleanup != NULL)
+		impl->funcs->cleanup(k);
+	freezero(k->shielded_private, k->shielded_len);
+	freezero(k->shield_prekey, k->shield_prekey_len);
+}
+
+int
+sshkey_read2(struct sshkey *ret, char **cpp)
+{
+	struct sshkey *k;
+	char *cp, *blobcopy;
+	size_t space;
+	int r = -1;
+	struct sshbuf *blob;
+
+	if (ret == NULL)
+		return SSH_ERR_INVALID_ARGUMENT;
+
+	cp = *cpp;
+	space = strcspn(cp, " \t");
+	if (space == strlen(cp))
+		return SSH_ERR_INVALID_FORMAT;
+	// skip whitespace
+	for (cp += space; *cp == ' ' || *cp == '\t'; cp++)
+		;
+	if (*cp == '\0')
+		return SSH_ERR_INVALID_FORMAT;
+	if ((blob = sshbuf_new()) == NULL)
+		return SSH_ERR_ALLOC_FAIL;
+
+	// find end of keyblob and decode
+	space = strcspn(cp, " \t");
+	if ((blobcopy = strndup(cp, space)) == NULL) {
+		sshbuf_free(blob);
+		return SSH_ERR_ALLOC_FAIL;
+	}
+	if ((r = sshbuf_b64tod(blob, blobcopy)) != 0) {
+		free(blobcopy);
+		sshbuf_free(blob);
+		return r;
+	}
+	free(blobcopy);
+	if ((r = sshkey_fromb(blob, &k)) != 0) {
+		sshbuf_free(blob);      // Py84= failed here
+		return r;
+	}
+	sshbuf_free(blob);
+
+	// skip whitespace and leave cp at start of comment
+	for (cp += space; *cp == ' ' || *cp == '\t'; cp++)
+		;
+
+	// Fill in ret from parsed key
+	sshkey_free_contents(ret);
+	*ret = *k;
+	freezero(k, sizeof(*k));
+
+	*cpp = cp;
+	return 0;
+}
+
 static int
 ukey_to_sshkey(struct sshkey *kp)
 {
-	// 初始化container，dev，还有ukey公钥blob
+	// init container/dev/pubkeyblob
 	if (init_ukey_container_and_dev() != SAR_OK) {
 		printf("init_ukey_container_and_dev failed\n");
 		return 1;
@@ -367,7 +433,7 @@ ukey_to_sshkey(struct sshkey *kp)
 		return 1;
 	}
 
-	// 从sm2.pub中读取公钥信息
+	// read pubkey info from sm2.pub
 	FILE *fp = fopen("sm2.pub", "r");
 	if (fp == NULL) {
 		printf("Error opening file: sm2.pub\n");
@@ -392,7 +458,7 @@ ukey_to_sshkey(struct sshkey *kp)
 	printf("File contents:\n%s\n", buffer);
 	fclose(fp);
 	
-	if (sshkey_read(kp, &buffer) != 0) {
+	if (sshkey_read2(kp, &buffer) != 0) {
 		debug("sshkey_read failed");
 		return SSH_ERR_SSHKEY_READ_FAILED;
 	}

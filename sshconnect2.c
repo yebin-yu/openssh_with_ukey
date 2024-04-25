@@ -1224,15 +1224,21 @@ void SM2_gmSig2OpensslSig(ECCSIGNATUREBLOB *sigBlob, unsigned char **sig, size_t
     BYTE *s = sigBlob->s+32;
     
     rB = BN_bin2bn(r, 32, NULL);
-    if(rB == NULL) {return NULL;}
+    if(rB == NULL) {
+		return;
+	}
     sB = BN_bin2bn(s, 32, NULL);
-    if(sB == NULL) {return NULL;}
+    if(sB == NULL) {
+		return;
+	}
 
     ECDSA_SIG *ecdsaSig = ECDSA_SIG_new();
-    if (ecdsaSig == NULL) {return NULL;}
+    if (ecdsaSig == NULL) {
+		return;
+	}
 
     if(ECDSA_SIG_set0(ecdsaSig, rB, sB) != 1) {
-        return NULL;
+        return;
     }
 
     unsigned char* sig_temp = NULL;
@@ -1293,14 +1299,14 @@ ssh_sm2_sign_sm2(struct sshkey *key,
 	if (sigp != NULL)
 		*sigp = NULL;
 
-	// 获取签名
+	// get signed data
 	if ((ret = ukey_get_sig(data, datalen, &sig, &slen, sign_key)) != 0) {
 		printf("ERROR: ukey_get_sig failed! \n");
 		goto out;
 	}
     
 	printf("====== sig len: %zu \n", slen);
-	// 把签名内容存在b中
+	// save sign data to b
 	if ((b = sshbuf_new()) == NULL) {
 		printf("ERROR: sshbuf_new  failed! \n");
 		ret = SSH_ERR_ALLOC_FAIL;
@@ -1312,7 +1318,7 @@ ssh_sm2_sign_sm2(struct sshkey *key,
 			goto out;
 		}
 	
-	// 把签名存到b中，再把b拷贝到*sigp中
+	// save sign data to b, and than copy to ·sigp·
 	len = sshbuf_len(b);
 	if (sigp != NULL) {
 		if ((*sigp = malloc(len)) == NULL) {
