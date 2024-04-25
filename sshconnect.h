@@ -24,6 +24,27 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// struct bignum_st {
+//     BN_ULONG *d;                /*
+//                                  * Pointer to an array of 'BN_BITS2' bit
+//                                  * chunks. These chunks are organised in
+//                                  * a least significant chunk first order.
+//                                  */
+//     int top;                    /* Index of last used d +1. */
+//     /* The next are internal book keeping for bn_expand. */
+//     int dmax;                   /* Size of the d array. */
+//     int neg;                    /* one if the number is negative */
+//     int flags;
+// };
+
+// typedef struct bignum_st BIGNUM2;
+
+// BIGNUM *sm2_compute_msg_hash(const EVP_MD *digest,
+//                                     const EC_KEY *key,
+//                                     const uint8_t *id,
+//                                     const size_t id_len,
+//                                     const uint8_t *msg, size_t msg_len);
+
 typedef struct Sensitive Sensitive;
 struct Sensitive {
 	struct sshkey	**keys;

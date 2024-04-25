@@ -1381,10 +1381,10 @@
 #define HAVE_STRING_H 1
 
 /* Define to 1 if you have the `strlcat' function. */
-/* #undef HAVE_STRLCAT */
+#define HAVE_STRLCAT 1
 
 /* Define to 1 if you have the `strlcpy' function. */
-/* #undef HAVE_STRLCPY */
+#define HAVE_STRLCPY 1
 
 /* Define to 1 if you have the `strmode' function. */
 /* #undef HAVE_STRMODE */
@@ -1914,7 +1914,7 @@
 /* #undef SANDBOX_SYSTRACE */
 
 /* Specify the system call convention in use */
-#define SECCOMP_AUDIT_ARCH AUDIT_ARCH_AARCH64
+#define SECCOMP_AUDIT_ARCH AUDIT_ARCH_X86_64
 
 /* Define if your platform breaks doing a seteuid before a setuid */
 /* #undef SETEUID_BREAKS_SETUID */
@@ -1998,7 +1998,7 @@
 /* #undef UNIXWARE_LONG_PASSWORDS */
 
 /* Specify default $PATH */
-#define USER_PATH "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
+#define USER_PATH "/usr/bin:/bin:/usr/sbin:/sbin"
 
 /* Define this if you want to use libkafs' AFS support */
 /* #undef USE_AFS */
