@@ -249,12 +249,16 @@ init_ukey_container_and_dev()
     ULONG retryCntMax = 3;
 	ULONG currentRetryCnt = 0;
     printf("UKEY pin:");
+	system("stty -echo");
     scanf("%s", pinStr);
+	system("stty echo");
     ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
 	while (ulRslt != SAR_OK && currentRetryCnt++ < retryCntMax) {
 		sleep(2);  // 防止暴力破解，等待两秒
     	printf("UKEY pin again:");
+		system("stty -echo");
     	scanf("%s", pinStr);
+		system("stty echo");
     	ulRslt = SKF_VerifyPIN(happ, USER_TYPE, pinStr, &retryCntMax);
 	}
 	if (ulRslt != SAR_OK) {
